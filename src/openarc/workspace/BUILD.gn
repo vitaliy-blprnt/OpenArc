@@ -24,15 +24,78 @@ source_set("tab_session_codec") {
   public_deps = [ "//base" ]
 }
 
+source_set("window_session_codec") {
+  sources = [
+    "window_session_codec.cc",
+    "window_session_codec.h",
+  ]
+  public_deps = [
+    ":tab_session_codec",
+    "//base",
+    "//components/sessions:session_id",
+  ]
+}
+
+source_set("saved_entry_catalog") {
+  sources = [
+    "saved_entry_catalog.cc",
+    "saved_entry_catalog.h",
+    "workspace_ids.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/bookmarks/browser",
+    "//url",
+  ]
+}
+
+source_set("saved_entry_catalog_unittests") {
+  testonly = true
+  sources = [ "saved_entry_catalog_unittest.cc" ]
+  deps = [
+    ":saved_entry_catalog",
+    "//components/bookmarks/test",
+    "//testing/gtest",
+  ]
+}
+
+source_set("workspace_tab_state") {
+  sources = [
+    "workspace_tab_state.cc",
+    "workspace_tab_state.h",
+  ]
+  public_deps = [
+    ":tab_session_codec",
+    "//chrome/browser/ui/tabs:tabs_public",
+    "//ui/base/unowned_user_data",
+  ]
+}
+
+source_set("workspace_tab_state_unittests") {
+  testonly = true
+  sources = [ "workspace_tab_state_unittest.cc" ]
+  deps = [
+    ":workspace_tab_state",
+    "//base/test:test_support",
+    "//components/tabs:test_support",
+    "//content/test:test_support",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//url",
+  ]
+}
+
 source_set("association_reconciler_unittests") {
   testonly = true
   sources = [
     "association_reconciler_unittest.cc",
     "tab_session_codec_unittest.cc",
+    "window_session_codec_unittest.cc",
   ]
   deps = [
     ":association_reconciler",
     ":tab_session_codec",
+    ":window_session_codec",
     "//testing/gtest",
   ]
 }
