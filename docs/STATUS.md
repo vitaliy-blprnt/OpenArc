@@ -35,7 +35,7 @@ does not promise this revision remains current after this checkpoint.
 | Tooling test suite | 46 tests passed locally, including build provenance, dependency inventory/bootstrap, and synthetic native-host safeguards |
 | Extension fixture scope guards | 12 Node tests passed; no Chrome APIs executed |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `8c9da79`, including Python and Node probe tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175722037)) |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `67ead1a`, including Python and Node probe tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175860909)) |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Visible browser UI | Not tested |
