@@ -65,8 +65,9 @@ The sequence is:
 1. `fetch` checks out pinned depot_tools, explicitly bootstraps its tools, and
    fetches the pinned Chromium source.
 2. `sync` resolves Chromium's pinned dependencies and runs its hooks.
-3. `apply` applies OpenArc's ordered integration patches. An empty series builds
-   the upstream baseline; it does not implement the planned OpenArc interface.
+3. `apply` stages the explicitly listed OpenArc source files and applies its
+   ordered integration patches. Neither step establishes browser integration
+   or runtime qualification by itself.
 4. `build` generates `out/OpenArc` with GN and builds the Chromium `chrome` target
    using `autoninja`.
 
@@ -162,20 +163,64 @@ its launch authorization. Runtime, signing, notarization, and password-manager
 trust still require their own evidence. The existing development build is kept
 separate throughout.
 
-### Remove the recorded patch overlay
+### Stage original OpenArc source
+
+The authored files live only under `src/openarc`. The explicit
+[`source-overlay.json`](../src/openarc/source-overlay.json) manifest lists the
+files that `apply` may copy to the same relative paths beneath
+`.build/chromium/src/openarc`. It accepts no alternate source or destination root.
+The initial list contains workspace source and GN files present at `e0d80c9`;
+new service or feature files need an explicit manifest change. Native sources
+remain authored in the parent repository, not in generated checkout copies or
+integration patches. Patches may connect Chromium targets to `//openarc/...`,
+but cannot modify files inside that owned namespace.
+
+**Stop builds and close browsers using this checkout before running `apply` or
+`unapply`.** `apply` snapshots the listed originals, checks existing ownership,
+and stages additions, replacements, and removals through Git. It rejects
+unowned destinations, symlinks, changed generated copies, and conflicting index
+state. It records the manifest digest, file hashes and executable modes in
+`.build/patch-state.json`, alongside the patch ledger and combined source digest.
+Repeated application of the same snapshot is harmless. An absent manifest is
+valid before installation; after installation, restore a missing manifest or
+use `unapply` to remove the recorded copies.
+
+`build`, `launch`, and `check --checkout` verify installed copies and their
+originals without reconciling anything. Changing a listed original, its mode,
+or the manifest requires explicit `apply` and a new build before launch. A
+successful overlay build records that source evidence in its receipt and checks
+it again after compilation. Until an overlay is installed, merely adding or
+editing the manifest and originals leaves existing build inputs and receipt
+formats unchanged. Baseline builds require the overlay to be removed. Baseline
+promotion preserves the original pristine receipt and includes the overlay only
+in the new development receipt.
+
+Before an overlay Git transition, the ledger stores its exact before and after
+states and reversible patch. If interrupted, `apply` resumes that transition and
+then reconciles the current manifest; `unapply` rolls it back before removing the
+recorded patches and copies. Recovery accepts only an exact recorded before or
+after state, with matching worktree and index ownership. Any other state blocks
+both operations and builds/launches, preserving files for manual review. These
+operations never reset or silently repair unknown work.
+
+### Remove the recorded patches and source overlay
 
 For planned maintenance, after stopping builds and closing browsers using the
 checkout, run `python3 scripts/openarc.py unapply`. It validates the current pin,
 patch hashes and recorded source state, then reverses only the applied prefix in
 reverse order, checkpointing each successful removal. Unknown edits/files are
 preserved and block the operation; failures retain the remaining recorded prefix
-for review or retry. It never resets, cleans, or stashes the checkout. Repeating
-the command when no patches remain is harmless.
+for review or retry. After reversing patches, it removes only unchanged owned
+source copies using their recorded hashes and modes; this still works if the
+originals or manifest have since changed or disappeared. It never resets,
+cleans, or stashes the checkout. Repeating the command when nothing remains is
+harmless.
 
 An interruption after Git reverses a patch but before its checkpoint is saved
-leaves the ledger out of sync. The next invocation fails closed; inspect and
+leaves the patch ledger out of sync. The next invocation fails closed; inspect and
 reconcile that state manually before retrying. Automatic retry is covered only
-between completed checkpoints.
+between completed patch checkpoints. The pending transition recovery described
+above applies specifically to generated source-overlay transitions.
 
 Build receipts and historical promotion evidence remain intact; removing patches
 does not authorize launching mismatched binaries or restore a promoted baseline.

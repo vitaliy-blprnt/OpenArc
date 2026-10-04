@@ -79,6 +79,404 @@ class WorkflowTests(unittest.TestCase):
             file.write(name + "\n")
         return path
 
+    def source_overlay(self, files=None):
+        files = {"workspace/core.h": b"// original\n"} if files is None else files
+        directory = self.root / "src/openarc"
+        for name, content in files.items():
+            path = directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        manifest = directory / "source-overlay.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({"schema_version": 1, "files": list(files)}))
+        return manifest
+
+    def interrupt_overlay(self, workflow, *, after_git=False, removing=False):
+        """Simulate process loss at either side of the indexed source transition."""
+        real_write = openarc.atomic_json
+
+        def writer(path, value):
+            if path == workflow.state_file:
+                if after_git and "pending_overlay" not in value:
+                    raise RuntimeError("interrupted after Git")
+                real_write(path, value)
+                if not after_git and "pending_overlay" in value:
+                    raise RuntimeError("interrupted before Git")
+            else:
+                real_write(path, value)
+
+        with patch.object(openarc, "atomic_json", side_effect=writer), self.assertRaisesRegex(RuntimeError, "interrupted"):
+            workflow.unapply() if removing else workflow.apply()
+
+    def test_overlay_manifest_alone_keeps_existing_inputs_and_launch_valid(self):
+        workflow, executable = self.packaging_candidate()
+        self.simulated_build(workflow, packaging=True)
+        before = workflow.build_inputs(False, True)
+        manifest = self.source_overlay()
+        manifest.write_text("an evolving manifest is not installed yet")
+        self.assertEqual(workflow.build_inputs(False, True), before)
+        self.assertNotIn("source_overlay", before)
+        self.assertEqual(workflow.verified_executable(False, True), executable)
+        self.assertFalse((workflow.src / "openarc").exists())
+
+    def test_overlay_installs_binary_content_modes_and_is_idempotent(self):
+        repo = self.repository()
+        self.source_overlay({"workspace/core.h": b"// original\n", "workspace/data.bin": b"\x00\xff\x01"})
+        (self.root / "src/openarc/workspace/core.h").chmod(0o755)
+        workflow = self.workflow()
+        workflow.apply()
+        before = workflow.state_file.read_bytes()
+        workflow.apply()
+        self.assertEqual(workflow.state_file.read_bytes(), before)
+        self.assertEqual((repo / "openarc/workspace/data.bin").read_bytes(), b"\x00\xff\x01")
+        self.assertTrue(git(repo, "ls-files", "--stage", "openarc/workspace/core.h").startswith("100755"))
+        self.assertIn("source_overlay", workflow.build_inputs(False))
+        workflow.unapply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        self.assertNotIn("source_overlay", json.loads(workflow.state_file.read_text()))
+        self.assertEqual((self.root / "src/openarc/workspace/core.h").read_bytes(), b"// original\n")
+
+    def test_overlay_reconciles_add_update_remove_and_mode_change(self):
+        repo = self.repository()
+        self.source_overlay({"workspace/core.h": b"old\n", "workspace/removed.h": b"remove\n"})
+        workflow = self.workflow()
+        workflow.apply()
+        self.source_overlay({"workspace/core.h": b"new\n", "workspace/added.h": b"add\n"})
+        (self.root / "src/openarc/workspace/core.h").chmod(0o755)
+        with self.assertRaisesRegex(openarc.WorkflowError, "originals or manifest changed"):
+            workflow.build_inputs(False)
+        workflow.apply()
+        self.assertEqual((repo / "openarc/workspace/core.h").read_bytes(), b"new\n")
+        self.assertFalse((repo / "openarc/workspace/removed.h").exists())
+        self.assertEqual((repo / "openarc/workspace/added.h").read_bytes(), b"add\n")
+        workflow.build_inputs(False)
+
+    def test_overlay_source_drift_blocks_build_launch_but_unapply_uses_recorded_copies(self):
+        repo = self.repository()
+        manifest = self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        receipt = workflow.build_receipt_path(False).read_bytes()
+        (self.root / "src/openarc/workspace/core.h").unlink()
+        manifest.write_text("invalid now")
+        with self.assertRaises(openarc.WorkflowError):
+            self.simulated_build(workflow)
+        with self.assertRaises(openarc.WorkflowError):
+            workflow.verified_executable(False)
+        self.assertEqual(workflow.build_receipt_path(False).read_bytes(), receipt)
+        workflow.unapply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        self.assertEqual(workflow.build_receipt_path(False).read_bytes(), receipt)
+
+    def test_overlay_ignored_collision_is_never_adopted_even_if_identical(self):
+        repo = self.repository()
+        self.source_overlay()
+        (repo / ".git/info/exclude").write_text("openarc/\n")
+        destination = repo / "openarc/workspace/core.h"
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"// original\n")
+        workflow = self.workflow()
+        with self.assertRaisesRegex(openarc.WorkflowError, "unowned"):
+            workflow.apply()
+        self.assertEqual(destination.read_bytes(), b"// original\n")
+        self.assertFalse(workflow.state_file.exists())
+
+    def test_overlay_rejects_symlinks_and_manifest_path_escapes(self):
+        repo = self.repository()
+        manifest = self.source_overlay()
+        original = manifest.parent / "workspace/core.h"
+        original.unlink()
+        original.symlink_to(repo / "example.txt")
+        with self.assertRaisesRegex(openarc.WorkflowError, "symlink"):
+            self.workflow().apply()
+        original.unlink()
+        original.write_text("safe\n")
+        destination = repo / "openarc"
+        destination.symlink_to(manifest.parent, target_is_directory=True)
+        with self.assertRaisesRegex(openarc.WorkflowError, "symlink|modified"):
+            self.workflow().apply()
+        destination.unlink()
+        for name in ("../outside.h", "/tmp/outside.h", "workspace/.git/config", "workspace//core.h"):
+            manifest.write_text(json.dumps({"schema_version": 1, "files": [name]}))
+            with self.subTest(name=name), self.assertRaises(openarc.WorkflowError):
+                self.workflow().apply()
+        self.assertEqual((repo / "example.txt").read_text(), "base\n")
+
+    def test_overlay_user_edits_in_worktree_or_index_block_apply_and_unapply(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        destination = repo / "openarc/workspace/core.h"
+        for staged in (False, True):
+            destination.write_text("user work\n")
+            if staged:
+                git(repo, "add", "openarc/workspace/core.h")
+            for operation in (workflow.apply, workflow.unapply):
+                with self.subTest(staged=staged), self.assertRaisesRegex(openarc.WorkflowError, "preserving local work"):
+                    operation()
+            self.assertEqual(destination.read_text(), "user work\n")
+            destination.write_text("// original\n")
+            git(repo, "add", "openarc/workspace/core.h")
+        workflow.unapply()
+
+    def test_overlay_ownership_checks_hidden_index_flags_and_ignored_mode_drift(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        for flag in ("assume-unchanged", "skip-worktree"):
+            git(repo, "update-index", "--" + flag, "openarc/workspace/core.h")
+            with self.subTest(flag=flag), self.assertRaisesRegex(openarc.WorkflowError, "ownership changed"):
+                workflow.unapply()
+            git(repo, "update-index", "--no-" + flag, "openarc/workspace/core.h")
+        git(repo, "config", "core.filemode", "false")
+        (repo / "openarc/workspace/core.h").chmod(0o755)
+        with self.assertRaisesRegex(openarc.WorkflowError, "ownership changed"):
+            workflow.apply()
+
+    def test_overlay_integration_patch_namespace_collision_is_rejected_before_staging(self):
+        repo = self.repository()
+        self.source_overlay()
+        path = self.series.parent / "bad.patch"
+        path.write_text("diff --git a/openarc/other.h b/openarc/other.h\nnew file mode 100644\n"
+                        "--- /dev/null\n+++ b/openarc/other.h\n@@ -0,0 +1 @@\n+owned by patch\n")
+        self.series.write_text("bad.patch\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "Integration patches"):
+            self.workflow().apply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+
+    def test_overlay_pending_before_state_blocks_build_and_explicit_apply_resumes(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        self.interrupt_overlay(workflow)
+        self.assertFalse((repo / "openarc/workspace/core.h").exists())
+        with self.assertRaisesRegex(openarc.WorkflowError, "Pending source overlay"):
+            workflow.build_inputs(False)
+        with self.assertRaisesRegex(openarc.WorkflowError, "source overlay"):
+            workflow.build_inputs(True)
+        workflow.apply()
+        self.assertNotIn("pending_overlay", json.loads(workflow.state_file.read_text()))
+        workflow.build_inputs(False)
+
+    def test_overlay_pending_after_state_is_checkpointed_without_duplicate_application(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        self.interrupt_overlay(workflow, after_git=True)
+        staged = git(repo, "diff", "--cached")
+        workflow.apply()
+        self.assertEqual(git(repo, "diff", "--cached"), staged)
+        self.assertNotIn("pending_overlay", json.loads(workflow.state_file.read_text()))
+
+    def test_overlay_pending_update_rolls_back_then_unapplies_without_originals(self):
+        repo = self.repository()
+        manifest = self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        self.source_overlay({"workspace/core.h": b"updated\n"})
+        self.interrupt_overlay(workflow, after_git=True)
+        manifest.unlink()
+        (self.root / "src/openarc/workspace/core.h").unlink()
+        workflow.unapply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        self.assertNotIn("pending_overlay", json.loads(workflow.state_file.read_text()))
+
+    def test_overlay_pending_before_state_can_be_cancelled_by_unapply(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        self.interrupt_overlay(workflow)
+        workflow.unapply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        self.assertNotIn("source_overlay", json.loads(workflow.state_file.read_text()))
+
+    def test_overlay_pending_unknown_changes_are_preserved(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        self.interrupt_overlay(workflow, after_git=True)
+        (repo / "openarc/workspace/core.h").write_text("new user work\n")
+        before = workflow.state_file.read_bytes()
+        for operation in (workflow.apply, workflow.unapply):
+            with self.assertRaisesRegex(openarc.WorkflowError, "neither its recorded"):
+                operation()
+        self.assertEqual(workflow.state_file.read_bytes(), before)
+        self.assertEqual((repo / "openarc/workspace/core.h").read_text(), "new user work\n")
+
+    def test_overlay_promotes_historical_baseline_without_changing_seed_shape(self):
+        workflow, _ = self.baseline_for_promotion()
+        baseline = workflow.read_build_receipt(True)
+        self.source_overlay()
+        workflow.apply()
+        self.executable(workflow, "OpenArc", workflow.baseline_output)
+        self.simulated_build(workflow, reuse_baseline=True)
+        receipt = workflow.read_build_receipt(False)
+        self.assertIn("source_overlay", receipt["inputs"])
+        promotion = json.loads(workflow.promotion_file.read_text())
+        self.assertEqual(promotion["baseline_receipt"], baseline)
+        self.assertNotIn("source_overlay", baseline["inputs"])
+        workflow.verified_executable(False)
+
+    def test_overlay_source_change_during_compilation_prevents_receipt(self):
+        self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        self.executable(workflow)
+        real_run = workflow.run
+
+        def runner(args, **kwargs):
+            if args[0] == str(workflow.depot / "gn"):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if args[0] == str(workflow.depot / "autoninja"):
+                (self.root / "src/openarc/workspace/core.h").write_text("changed during build\n")
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
+                patch.object(workflow, "ensure_bootstrap"), patch.object(workflow, "run", side_effect=runner):
+            with self.assertRaisesRegex(openarc.WorkflowError, "originals or manifest changed"):
+                workflow.build(2)
+        self.assertFalse(workflow.build_receipt_path(False).exists())
+
+    def test_overlay_missing_manifest_does_not_silently_remove_installed_copies(self):
+        repo = self.repository()
+        manifest = self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        manifest.unlink()
+        before = workflow.state_file.read_bytes()
+        with self.assertRaisesRegex(openarc.WorkflowError, "manifest is missing"):
+            workflow.apply()
+        self.assertEqual(workflow.state_file.read_bytes(), before)
+        self.assertTrue((repo / "openarc/workspace/core.h").exists())
+        workflow.unapply()
+        self.assertFalse((repo / "openarc/workspace/core.h").exists())
+
+    def test_overlay_case_collisions_and_duplicate_paths_are_rejected(self):
+        repo = self.repository()
+        manifest = self.source_overlay()
+        for names in (["workspace/core.h", "workspace/core.h"], ["workspace/core.h", "workspace/CORE.h"]):
+            manifest.write_text(json.dumps({"schema_version": 1, "files": names}))
+            with self.subTest(names=names), self.assertRaisesRegex(openarc.WorkflowError, "unique"):
+                self.workflow().apply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+
+    def test_overlay_upstream_tracked_destination_cannot_be_adopted(self):
+        repo = self.repository()
+        self.source_overlay()
+        destination = repo / "openarc/workspace/core.h"
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"// original\n")
+        git(repo, "add", "openarc")
+        git(repo, "commit", "-m", "upstream owns destination")
+        self.lock["chromium"]["revision"] = git(repo, "rev-parse", "HEAD")
+        self.write_lock()
+        with self.assertRaisesRegex(openarc.WorkflowError, "unowned"):
+            self.workflow().apply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+
+    def test_overlay_unapply_preserves_unowned_ignored_neighbors(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        (repo / ".git/info/exclude").write_text("openarc/workspace/personal.h\n")
+        neighbor = repo / "openarc/workspace/personal.h"
+        neighbor.write_text("unowned user file\n")
+        workflow.unapply()
+        self.assertEqual(neighbor.read_text(), "unowned user file\n")
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+
+    def test_overlay_rejects_patch_renaming_owned_source_outside_namespace(self):
+        self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        path = self.series.parent / "rename.patch"
+        path.write_text("diff --git a/openarc/workspace/core.h b/elsewhere.h\n"
+                        "similarity index 100%\nrename from openarc/workspace/core.h\nrename to elsewhere.h\n")
+        self.series.write_text("rename.patch\n")
+        before = workflow.state_file.read_bytes()
+        with self.assertRaisesRegex(openarc.WorkflowError, "Integration patches"):
+            workflow.apply()
+        self.assertEqual(workflow.state_file.read_bytes(), before)
+
+    def test_overlay_manifest_only_change_has_recoverable_metadata_transition(self):
+        self.repository()
+        manifest = self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        old_digest = workflow.tree_digest()
+        manifest.write_text(manifest.read_text() + "\n")
+        self.interrupt_overlay(workflow)
+        workflow.apply()
+        self.assertEqual(workflow.tree_digest(), old_digest)
+        self.assertEqual(workflow.build_inputs(False)["source_overlay"]["manifest_sha256"],
+                         openarc.file_digest(manifest))
+
+    def test_overlay_checkout_check_detects_source_drift_without_reconciling(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        (self.root / "src/openarc/workspace/core.h").write_text("changed original\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "originals or manifest changed"):
+            workflow.check(checkout=True)
+        self.assertEqual((repo / "openarc/workspace/core.h").read_text(), "// original\n")
+
+    def test_overlay_interrupted_removal_can_retry_without_originals(self):
+        repo = self.repository()
+        manifest = self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        manifest.unlink()
+        (self.root / "src/openarc/workspace/core.h").unlink()
+        self.interrupt_overlay(workflow, after_git=True, removing=True)
+        self.assertFalse((repo / "openarc/workspace/core.h").exists())
+        self.assertIn("pending_overlay", json.loads(workflow.state_file.read_text()))
+        workflow.unapply()
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        self.assertNotIn("source_overlay", json.loads(workflow.state_file.read_text()))
+
+    def test_overlay_corrupt_pending_record_never_mutates_checkout(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        self.interrupt_overlay(workflow)
+        valid = json.loads(workflow.state_file.read_text())
+        for corrupt in ([], {"before": {}, "after": []}, dict(valid["pending_overlay"], patch="corrupted")):
+            recorded = dict(valid, pending_overlay=corrupt)
+            workflow.state_file.write_text(json.dumps(recorded))
+            for operation in (workflow.apply, workflow.unapply):
+                with self.subTest(corrupt=corrupt), self.assertRaisesRegex(openarc.WorkflowError, "Invalid pending"):
+                    operation()
+            self.assertEqual(git(repo, "status", "--porcelain"), "")
+            self.assertEqual(json.loads(workflow.state_file.read_text()), recorded)
+
+    def test_overlay_concurrent_index_edit_is_not_adopted_during_preparation(self):
+        repo = self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        real_run = workflow.run
+
+        def runner(args, **kwargs):
+            result = real_run(args, **kwargs)
+            if args[-3:] == ["rev-parse", "--git-path", "index"]:
+                (repo / "example.txt").write_text("concurrent user work\n")
+                git(repo, "add", "example.txt")
+            return result
+
+        with patch.object(workflow, "run", side_effect=runner), self.assertRaisesRegex(openarc.WorkflowError, "while preparing"):
+            workflow.apply()
+        self.assertFalse(workflow.state_file.exists())
+        self.assertFalse((repo / "openarc/workspace/core.h").exists())
+        self.assertEqual((repo / "example.txt").read_text(), "concurrent user work\n")
+
     def executable(self, workflow, name="Chromium", output=None):
         executable = (output or workflow.output) / f"{name}.app" / "Contents" / "MacOS" / name
         executable.parent.mkdir(parents=True, exist_ok=True)

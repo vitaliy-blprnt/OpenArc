@@ -156,11 +156,11 @@ class Workflow:
             gn_value(value)
 
     def run(self, args: list[str], cwd: Path | None = None, *, capture: bool = False,
-            check: bool = True) -> subprocess.CompletedProcess:
+            check: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
         if not capture:
             print("+ " + shlex.join(str(arg) for arg in args), flush=True)
         try:
-            result = subprocess.run(args, cwd=cwd or self.root, env=self.env,
+            result = subprocess.run(args, cwd=cwd or self.root, env=self.env if env is None else env,
                                     text=True, capture_output=capture, check=False)
         except OSError as exc:
             raise WorkflowError(f"Cannot execute {args[0]}: {exc}") from exc
@@ -385,7 +385,182 @@ class Workflow:
         value = self.run(["git", "-C", str(self.src), "diff", "--binary", "HEAD"], capture=True).stdout
         return digest(value.encode())
 
-    def patch_state(self, patches: list[tuple[str, Path, str]]) -> dict:
+    def overlay_path(self, name: str, *, original: bool = False) -> Path:
+        relative = relative_path(name, "source overlay file")
+        if (str(relative) != name or any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part)
+                                       or part.lower() == ".git" for part in relative.parts)):
+            raise WorkflowError(f"Invalid source overlay file: {name}")
+        base = self.root / "src/openarc" if original else self.src / "openarc"
+        return self.safe_path(base / relative)
+
+    def overlay_snapshot(self) -> tuple[dict | None, dict[str, bytes]]:
+        """Read the one authored copy; only explicit apply installs this snapshot."""
+        manifest = self.safe_path(self.root / "src/openarc/source-overlay.json")
+        if not manifest.exists():
+            return None, {}
+        try:
+            content = manifest.read_bytes()
+            value = json.loads(content)
+            names = value["files"]
+            if (value.get("schema_version") != 1 or not isinstance(names, list)
+                    or not all(isinstance(name, str) for name in names)
+                    or len(names) != len({name.casefold() for name in names})):
+                raise ValueError("expected schema_version 1 and unique file paths")
+            files, contents = [], {}
+            for name in sorted(names):
+                path = self.overlay_path(name, original=True)
+                if not path.is_file():
+                    raise WorkflowError(f"Missing regular source overlay original: {path}")
+                data = path.read_bytes()
+                mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+                files.append({"path": name, "sha256": digest(data), "mode": mode})
+                contents[name] = data
+            return {"schema_version": 1, "manifest_sha256": digest(content), "files": files}, contents
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise WorkflowError(f"Invalid source overlay manifest: {exc}") from exc
+
+    def overlay_files(self, overlay: dict | None) -> list[dict]:
+        if overlay is None:
+            return []
+        if (not isinstance(overlay, dict) or overlay.get("schema_version") != 1
+                or not re.fullmatch(r"[0-9a-f]{64}", str(overlay.get("manifest_sha256")))
+                or not isinstance(overlay.get("files"), list)):
+            raise WorkflowError("Invalid recorded source overlay; preserve the checkout")
+        names = set()
+        for item in overlay["files"]:
+            if (not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                    or item["path"] in names or item.get("mode") not in ("100644", "100755")
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256")))):
+                raise WorkflowError("Invalid recorded source overlay file; preserve the checkout")
+            self.overlay_path(item["path"])
+            names.add(item["path"])
+        return overlay["files"]
+
+    def verify_overlay(self, overlay: dict | None, *, originals: bool = False) -> None:
+        for item in self.overlay_files(overlay):
+            path = self.overlay_path(item["path"])
+            relative = "openarc/" + item["path"]
+            stage = self.git(self.src, "ls-files", "--stage", "--", relative).split()
+            mode = "100755" if path.is_file() and path.stat().st_mode & 0o111 else "100644"
+            if (not path.is_file() or file_digest(path) != item["sha256"] or mode != item["mode"]
+                    or len(stage) != 4 or stage[0] != item["mode"] or stage[2] != "0"
+                    or stage[1] != self.git(self.src, "hash-object", "--", relative)
+                    or self.git(self.src, "ls-files", "-v", "--", relative) != "H " + relative
+                    or self.git(self.src, "ls-tree", "HEAD", "--", relative)):
+                raise WorkflowError(f"Source overlay ownership changed; preserving {relative}")
+        if originals and overlay is not None and self.overlay_snapshot()[0] != overlay:
+            raise WorkflowError("Source overlay originals or manifest changed; run apply explicitly before build or launch")
+
+    def overlay_patch_boundary(self, path: Path) -> None:
+        for reverse in ([], ["--reverse"]):
+            output = self.run(["git", "apply", "--numstat", "-z", *reverse, str(path)], capture=True).stdout
+            for entry in output.split("\0"):
+                if entry and entry.split("\t", 2)[-1].split("/")[0] == "openarc":
+                    raise WorkflowError("Integration patches must not modify the owned openarc/ source overlay")
+
+    def overlay_transition(self, state: dict, desired: dict | None, contents: dict[str, bytes]) -> dict:
+        """Prepare one indexed Git transition, then persist intent before touching source."""
+        previous = state.get("source_overlay")
+        self.verify_overlay(previous)
+        if previous == desired:
+            return state
+        owned = {item["path"] for item in self.overlay_files(previous)}
+        for item in self.overlay_files(desired):
+            name = item["path"]
+            path = self.overlay_path(name)
+            if name not in owned and (path.exists() or self.git(self.src, "ls-files", "--", "openarc/" + name)):
+                raise WorkflowError(f"Refusing to overwrite unowned source overlay destination: {path}")
+        with tempfile.TemporaryDirectory(prefix="openarc-overlay-") as temporary:
+            scratch = Path(temporary)
+            self.run(["git", "init", "--quiet", str(scratch)], capture=True)
+            # Construct trees directly from bytes, avoiding user filters, hooks and commits.
+            trees = []
+            for overlay, data in ((previous, {name: self.overlay_path(name).read_bytes() for name in owned}),
+                                  (desired, contents)):
+                self.run(["git", "-C", str(scratch), "read-tree", "--empty"], capture=True)
+                for item in self.overlay_files(overlay):
+                    blob = scratch / "blob"
+                    blob.write_bytes(data[item["path"]])
+                    oid = self.git(scratch, "hash-object", "-w", "--no-filters", str(blob))
+                    self.git(scratch, "update-index", "--add", "--cacheinfo",
+                             item["mode"], oid, "openarc/" + item["path"])
+                trees.append(self.git(scratch, "write-tree"))
+            transition = self.run(["git", "-C", str(scratch), "diff", "--binary", "--no-ext-diff",
+                                   "--no-textconv", "--no-color", "--no-renames", "--src-prefix=a/",
+                                   "--dst-prefix=b/", trees[0], trees[1]], capture=True).stdout
+            after = dict(state)
+            if desired is None:
+                after.pop("source_overlay", None)
+            else:
+                after["source_overlay"] = desired
+            patch_file = scratch / "transition.patch"
+            patch_file.write_text(transition)
+            index = Path(self.git(self.src, "rev-parse", "--git-path", "index"))
+            index = self.safe_path(index if index.is_absolute() else self.src / index)
+            shutil.copyfile(index, scratch / "index")
+            env = dict(self.env, GIT_INDEX_FILE=str(scratch / "index"))
+            if transition:
+                self.run(["git", "-C", str(self.src), "apply", "--cached", str(patch_file)], capture=True, env=env)
+            expected = self.run(["git", "-C", str(self.src), "diff", "--cached", "--binary", "HEAD"], capture=True, env=env).stdout
+            after["tree_digest"] = digest(expected.encode())
+            if (self.tree_digest() != state["tree_digest"]
+                    or self.git(self.src, "diff", "--name-only")
+                    or self.git(self.src, "ls-files", "--others", "--exclude-standard")):
+                raise WorkflowError("Checkout changed while preparing source overlay; preserving local work")
+            self.verify_overlay(previous)
+            pending = dict(state, pending_overlay={"before": state, "after": after, "patch": transition,
+                                                   "patch_sha256": digest(transition.encode())})
+            atomic_json(self.state_file, pending)
+        return self.recover_overlay(pending, "apply")
+
+    def recover_overlay(self, state: dict, action: str) -> dict:
+        """Explicit apply resumes intent; explicit unapply rolls it back. Never guess."""
+        pending = state["pending_overlay"]
+        if (not isinstance(pending, dict) or not isinstance(pending.get("before"), dict)
+                or not isinstance(pending.get("after"), dict)):
+            raise WorkflowError("Invalid pending source overlay transition; preserve the checkout")
+        before, after, transition = pending["before"], pending["after"], pending["patch"]
+        recorded = dict(state)
+        recorded.pop("pending_overlay")
+        expected_after = dict(before, tree_digest=after.get("tree_digest"))
+        expected_after.pop("source_overlay", None)
+        if "source_overlay" in after:
+            expected_after["source_overlay"] = after["source_overlay"]
+        if (before != recorded or after != expected_after or not isinstance(transition, str)
+                or digest(transition.encode()) != pending.get("patch_sha256")):
+            raise WorkflowError("Invalid pending source overlay transition; preserve the checkout")
+        for candidate in (before, after):
+            if not re.fullmatch(r"[0-9a-f]{64}", str(candidate.get("tree_digest"))):
+                raise WorkflowError("Invalid pending source overlay digest; preserve the checkout")
+            self.overlay_files(candidate.get("source_overlay"))
+        current = self.tree_digest()
+        if (self.git(self.src, "ls-files", "--others", "--exclude-standard")
+                or self.git(self.src, "diff", "--name-only")
+                or current not in (before["tree_digest"], after["tree_digest"])):
+            raise WorkflowError("Pending source overlay is neither its recorded before nor after state; preserving local work")
+        at_before = current == before["tree_digest"]
+        self.verify_overlay((before if at_before else after).get("source_overlay"))
+        target = after if action == "apply" else before
+        if current != target["tree_digest"]:
+            with tempfile.TemporaryDirectory(prefix="openarc-overlay-recover-") as temporary:
+                patch_file = Path(temporary) / "transition.patch"
+                patch_file.write_text(transition)
+                # A pending record may only own paths in the fixed destination namespace.
+                for reverse in ([], ["--reverse"]):
+                    stat = self.run(["git", "apply", "--numstat", "-z", *reverse, str(patch_file)], capture=True).stdout
+                    if any(entry and not entry.split("\t", 2)[-1].startswith("openarc/") for entry in stat.split("\0")):
+                        raise WorkflowError("Pending source overlay patch escapes openarc/; preserving checkout")
+                direction = [] if action == "apply" else ["--reverse"]
+                args = ["git", "-C", str(self.src), "apply", "--index", *direction]
+                self.run([*args, "--check", str(patch_file)], capture=True)
+                self.run([*args, str(patch_file)], capture=True)
+        if self.tree_digest() != target["tree_digest"]:
+            raise WorkflowError("Source overlay transition did not reach its recorded state; preserve the pending record")
+        self.verify_overlay(target.get("source_overlay"))
+        atomic_json(self.state_file, target)
+        return target
+
+    def patch_state(self, patches: list[tuple[str, Path, str]], *, recover: str | None = None) -> dict:
         if not self.state_file.exists():
             self.assert_clean(self.src)
             return {"revision": self.lock["chromium"]["revision"], "applied": [], "tree_digest": self.tree_digest()}
@@ -397,10 +572,15 @@ class Workflow:
                     or not isinstance(applied, list) or applied != expected[:len(applied)]
                     or len(applied) > len(expected)):
                 raise WorkflowError("Applied patch state does not match the lock/series; preserve and reconcile the checkout manually")
+            if "pending_overlay" in state:
+                if recover is None:
+                    raise WorkflowError("Pending source overlay transition; use apply to resume or unapply to roll back")
+                state = self.recover_overlay(state, recover)
             untracked = self.git(self.src, "ls-files", "--others", "--exclude-standard")
             unstaged = self.git(self.src, "diff", "--name-only")
             if untracked or unstaged or state["tree_digest"] != self.tree_digest():
                 raise WorkflowError("Checkout changed outside the recorded patch application; preserving local work")
+            self.verify_overlay(state.get("source_overlay"))
             return state
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise WorkflowError(f"Invalid patch state; preserving checkout: {exc}") from exc
@@ -408,7 +588,14 @@ class Workflow:
     def apply(self) -> None:
         self.assert_pin(self.src, "chromium")
         patches = self.patches()
-        state = self.patch_state(patches)
+        state = self.patch_state(patches, recover="apply")
+        desired, contents = self.overlay_snapshot()
+        if desired is None and "source_overlay" in state:
+            raise WorkflowError("Installed source overlay manifest is missing; restore it or use unapply to remove recorded copies")
+        if desired is not None or state.get("source_overlay") is not None:
+            for _, path, _ in patches:
+                self.overlay_patch_boundary(path)
+            state = self.overlay_transition(state, desired, contents)
         for name, path, sha in patches[len(state["applied"]):]:
             self.run(["git", "-C", str(self.src), "apply", "--check", "--index", str(path)])
             self.run(["git", "-C", str(self.src), "apply", "--index", str(path)])
@@ -418,12 +605,12 @@ class Workflow:
         if patches:
             print(f"{len(patches)} patches applied and verified; no duplicate application")
         else:
-            print("Empty patch series: unmodified Chromium baseline")
+            print("Empty patch series" + ("; owned source overlay installed" if desired is not None else ": unmodified Chromium baseline"))
 
     def unapply(self) -> None:
         self.assert_pin(self.src, "chromium")
         patches = self.patches()
-        state = self.patch_state(patches)
+        state = self.patch_state(patches, recover="unapply")
         count = len(state["applied"])
         for _, path, _ in reversed(patches[:count]):
             self.run(["git", "-C", str(self.src), "apply", "--reverse", "--check", "--index", str(path)])
@@ -431,6 +618,7 @@ class Workflow:
             state["applied"].pop()
             state["tree_digest"] = self.tree_digest()
             atomic_json(self.state_file, state)
+        state = self.overlay_transition(state, None, {})
         self.assert_clean(self.src)
         print(f"{count} recorded patches removed; source is pristine at the locked revision. Build evidence is unchanged.")
 
@@ -465,6 +653,13 @@ class Workflow:
         if current_lock != self.lock:
             raise WorkflowError("upstream.lock changed during the operation; rerun with the new configuration")
         if baseline:
+            if self.state_file.exists():
+                try:
+                    recorded = json.loads(self.state_file.read_text())
+                except (OSError, ValueError) as exc:
+                    raise WorkflowError(f"Cannot inspect source ownership before baseline build: {exc}") from exc
+                if "pending_overlay" in recorded or "source_overlay" in recorded:
+                    raise WorkflowError("Remove the recorded source overlay with unapply before a pristine baseline build")
             self.assert_clean(self.src)
             applied = []
         else:
@@ -473,8 +668,11 @@ class Workflow:
             if len(state["applied"]) != len(patches):
                 raise WorkflowError("Patch series is not fully applied; run apply before build, or use --baseline for clean upstream")
             applied = state["applied"]
+            self.verify_overlay(state.get("source_overlay"), originals=True)
         inputs = {"baseline": baseline, "upstream": self.lock, "patches": applied,
                   "checkout_diff_sha256": self.tree_digest(), "dependencies": self.dependency_evidence()}
+        if not baseline and "source_overlay" in state:
+            inputs["source_overlay"] = state["source_overlay"]
         if packaging:
             branding = self.safe_path(self.src / "chrome/app/theme/chromium/BRANDING")
             if not applied or not branding.is_file() or "PRODUCT_FULLNAME=OpenArc" not in branding.read_text().splitlines():
@@ -504,6 +702,7 @@ class Workflow:
         # original baseline must have built these same pinned inputs, before
         # the recorded patch overlay was applied.
         pristine = dict(inputs, baseline=True, patches=[], checkout_diff_sha256=digest(b""))
+        pristine.pop("source_overlay", None)
         if (not isinstance(receipt, dict) or receipt.get("receipt_version") != 1
                 or receipt.get("inputs") != pristine or receipt.get("output") != "out/Baseline"
                 or not isinstance(receipt.get("binary"), dict)
@@ -668,10 +867,14 @@ class Workflow:
         patches = self.patches()
         for _, path, _ in patches:
             self.run(["git", "apply", "--numstat", str(path)], capture=True)
+        overlay, _ = self.overlay_snapshot()
         details = {"lock": "valid", "patch_count": len(patches), "checkout": "not inspected (use --checkout)"}
+        if overlay is not None:
+            details["source_overlay_files"] = len(overlay["files"])
         if checkout:
             self.assert_pin(self.src, "chromium")
             state = self.patch_state(patches)
+            self.verify_overlay(state.get("source_overlay"), originals=True)
             details["checkout"] = "locked revision; " + str(len(state["applied"])) + " recorded patches verified"
         print(json.dumps(details, indent=2))
 

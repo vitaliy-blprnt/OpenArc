@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "files": [
+    "workspace/BUILD.gn",
+    "workspace/association_reconciler.cc",
+    "workspace/association_reconciler.h",
+    "workspace/association_reconciler_unittest.cc",
+    "workspace/saved_entry_catalog.cc",
+    "workspace/saved_entry_catalog.h",
+    "workspace/saved_entry_catalog_test_main.cc",
+    "workspace/saved_entry_catalog_unittest.cc",
+    "workspace/tab_session_codec.cc",
+    "workspace/tab_session_codec.h",
+    "workspace/tab_session_codec_unittest.cc",
+    "workspace/window_session_codec.cc",
+    "workspace/window_session_codec.h",
+    "workspace/window_session_codec_unittest.cc",
+    "workspace/workspace_ids.h",
+    "workspace/workspace_tab_state.cc",
+    "workspace/workspace_tab_state.h",
+    "workspace/workspace_tab_state_unittest.cc"
+  ]
+}
