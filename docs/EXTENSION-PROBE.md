@@ -6,6 +6,38 @@ No browser execution is implied by its presence in the repository. A static
 check or a passing fixture run does not establish Web Store compatibility,
 native password-manager integration, or support for every Chrome extension.
 
+## Recorded seven-patch OpenArc result
+
+On 4 October 2026, the seven-patch OpenArc component build completed 29 final
+incremental build steps. Native UI verified **154.0.8037.98 ARM64**, bundle
+`org.openarc.browser`, the isolated `.build/profiles/development/Default`
+profile, the exact OpenArc executable, and native vertical tabs. It launched
+without feature override flags and rendered Example Domain. Fixture **0.3.0**
+passed all **22 automated checks** and the separate exact nonce/pong protocol 1
+native check.
+
+All six manual surfaces were also observed in this build: popup rendering and
+its **Open dashboard** action, the browser's **Options** entry, user-gesture
+side-panel rendering, its dashboard action from a webpage, and the visible page
+context-menu dashboard action. These observations are separate from the
+automatic report's unchanged `manualSurfaces` field.
+
+Separately, uBlock Origin Lite **2026.930.1227**, ID
+`ddkjiahejlhfcafbddmgiahcphecmpfh`, installed from the official Chrome Web Store
+through the native permission prompt in the earlier four-patch build. The same
+version, enabled state and Chrome Web Store source persisted after restart into
+the seven-patch build. Its popup and options were observed. Update delivery and
+filtering behavior remain untested; these are not fixture results.
+
+The ignored final report is
+`.build/reports/openarc-extension-probe-seven-patch.json`, run
+`e3e63c90-1b03-431a-9e33-45d7ddbe37dd`. Manual observations are recorded in
+`.build/reports/openarc-ui-observations-seven-patch.json`. The synthetic host
+was unregistered and the owned browser exited afterward. Earlier four-patch
+reports remain separate historical evidence.
+M1 remains incomplete; these results do not qualify signed identity, vendor
+trust, credentials, or universal extension compatibility.
+
 ## Recorded baseline result
 
 On 4 October 2026, fixture **0.3.0** passed all **22 automated checks** in the
@@ -27,8 +59,8 @@ unregistered and the owned baseline process exited afterward. This run used mock
 Keychain and synthetic data. It proves the tested unpacked fixture paths in
 that unmodified baseline; it does not qualify patched OpenArc, Web Store
 installation/update, signed identity, vendor native integration, credentials,
-or universal extension compatibility. The OpenArc build is currently in progress
-and requires its own run.
+or universal extension compatibility. The separate OpenArc result above provides
+its own narrower evidence.
 
 The fixture's reduced user-agent string does not establish the full build
 version or architecture; those came from native UI and build evidence. The zero
@@ -95,13 +127,17 @@ python3 scripts/native_probe.py install --baseline --extension-id YOUR_EXTENSION
 ```
 
 For the normal development mode, substitute `--development` for `--baseline`.
+For the separate self-contained candidate, use `--packaging`; its host is
+registered only under `.build/profiles/packaging/NativeMessagingHosts`, matching
+the packaging launcher's isolated profile. This does not sign the candidate or
+qualify any vendor integration.
 Those modes target `.build/profiles/baseline/NativeMessagingHosts` and
 `.build/profiles/development/NativeMessagingHosts` respectively. The optional
 `--reference` mode targets only
 `.build/profiles/fixture-reference/NativeMessagingHosts`. No mode registers a host
 in system or daily-use browser locations. Host discovery and the synthetic
-exchange passed in the unmodified baseline described above; patched OpenArc
-still needs its own verification.
+exchange passed separately in the unmodified baseline and the seven-patch
+OpenArc build described above; subsequent builds need their own verification.
 
 To validate the fixture against a separately installed Chromium-based reference
 browser, launch it with this repository's absolute
@@ -151,12 +187,12 @@ this synthetic exchange proves only that transport path in the tested build.
 
 Fixture version **0.3.0** adds one tab-event delivery check, bringing the default
 suite to 22 checks. All 22, including the pin/unpin and tab-group checks added in
-0.2.0, passed in the locally built Chromium baseline recorded above. Earlier
+0.2.0, passed in both the locally built Chromium baseline and seven-patch OpenArc
+recorded above. Earlier
 0.1.0 reports do not cover the new checks. Reload the unpacked extension, accept
 its added `tabGroups` permission if upgrading from 0.1.0, and run the complete
-suite against each new browser build. The patched OpenArc run remains pending;
-source tests, reference-browser runs, and the unmodified baseline do not qualify
-its compatibility.
+suite against each new browser build. Source tests, reference-browser runs,
+and earlier builds do not qualify a later build's compatibility.
 
 Structure checks query only the synthetic window and stop if it contains more
 than the expected two recorded, nonce-owned tabs. They do not record unexpected
@@ -222,7 +258,8 @@ extension after testing and dispose of the dedicated test profile when done.
 
 ## Checks that do not launch a browser
 
-The scope guards have 31 passing dependency-free Node tests at this checkpoint:
+The scope guards have 31 passing dependency-free Node tests locally;
+current hosted checks remain pending:
 
 ```sh
 node --test tests/extensions/platform-probe/scope.test.mjs

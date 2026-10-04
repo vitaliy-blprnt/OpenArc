@@ -1,10 +1,12 @@
 # Proposed saved-tab and Space model
 
-**Status: implementation contract only.** This work belongs to M3 and the first
-M4 slice. It is pending the M0–M2 build, extension, and upstream-update gates in
-[BROWSER-PLAN.md](BROWSER-PLAN.md). No module below is implemented or qualified by
-this document. A reference Chrome test is useful fixture evidence, not an
-OpenArc acceptance result.
+**Status: implementation contract with bounded native preparation underway.**
+M0 and the seven-patch OpenArc extension fixture provide the start gate for M3
+model work. Pure association and tab-session helpers have standalone native-test
+evidence; the integrated modules and M4 UI below are not qualified by this
+document. Full M1/M2 acceptance remains required before M3 completion and broad
+custom-shell work, as specified in [BROWSER-PLAN.md](BROWSER-PLAN.md). Signing,
+vendor trust and delivered upstream upgrades remain separate open gates.
 
 This contract follows the plan's profile/window ownership rules and the pinned
 source seams in [CHROMIUM-INTEGRATION.md](CHROMIUM-INTEGRATION.md#workspace-integration-seams).
@@ -205,8 +207,18 @@ the entry. Otherwise restore the bookmark unloaded.
 
 ## Implementation checkpoints and evidence
 
-After M0–M2 pass, implement model/reconciliation first without sidebar changes.
-The first UI slice is one default Space with a bounded Saved tree above a divider
+Implement bounded model/reconciliation work now against the verified development
+baseline, without sidebar changes: native IDs/codecs, pure restore logic, a
+BookmarkModel-backed saved-entry catalog, and focused native tests. This work
+does not depend on completing signed password-manager integration or release
+delivery, and it must not claim those gates passed. M3 acceptance still requires
+M1/M2 acceptance and the full model/integration scenarios below.
+
+Once the relevant default-Space model invariants and core extension regression
+baseline pass, one bounded UI development slice may begin without waiting for
+external vendor credentials or release delivery. Broad custom-shell work and
+full M4 acceptance still require accepted M1–M3. The first slice is one default
+Space with a bounded Saved tree above a divider
 in the existing vertical region and real ordinary tabs below. Implement Save,
 activate, close live page, remove with Undo, and Return to saved destination.
 Keep the existing toolbar, omnibox, extension actions, permission UI, resize,

@@ -4,14 +4,39 @@ Research dates: 3–4 October 2026. Source baseline: Chromium **154.0.8037.98**,
 
 ## Delivered patches and evidence
 
-`patches/chromium/series` orders four small patches:
+`patches/chromium/series` orders seven patches:
 
 1. **`0001-openarc-identity.patch`** changes the application/bundle identity, default profile directory, macOS Safe Storage identity, system native-host/external-extension registration paths, and five prominent product/helper strings. It retains Chromium's copyright attribution and does not enable Google Chrome branding.
 2. **`0002-openarc-vertical-tabs.patch`** changes the registered native vertical-tab preference default from false to true. An explicit existing preference remains authoritative; this is not a forced startup override.
 3. **`0003-openarc-no-ai-defaults.patch`** disables ten browser AI defaults: Gemini, AI Mode eligibility and its independent Settings link, Skills, Compose eligibility, launched AI history search, Lens overlay and standalone image search, video-frame visual search, and desktop Autofill AI. The Autofill AI opt-in section also follows its feature gate. Already-disabled history-answer and Contextual Tasks controls remain unchanged. These are product defaults, not a hard ban or complete AI-surface qualification.
 4. **`0004-openarc-disable-automated-password-change.patch`** adds a default-off OpenArc product gate at automated password-change availability, direct offer/start, and login-quality-reporting boundaries. It adds five focused service tests and explicitly enables the gate in existing behavior-test fixtures. It does not change password storage or manual password-management code.
+5. **`0005-openarc-disable-bundled-fieldtrial-tests.patch`** sets the existing GN default `disable_fieldtrial_testing_config=true`. Chromium's bundled macOS experiments re-enable Glic and Skills despite their disabled feature defaults in unbranded development builds. This removes those automatic testing overrides; it does not remove explicit feature overrides or stored variations-seed support. Native vertical tabs still follow the preference set by patch 0002.
+6. **`0006-openarc-visible-product-strings.patch`** updates 51 named product-label resources (60 conditional variants) for windows, menus, profiles, new-tab customization, session banners, and extension installation. Resource names, numeric IDs, placeholders, Chrome Web Store references, and attribution remain unchanged. Updated non-English labels can fall back to English until OpenArc translations exist.
+7. **`0007-openarc-preserve-search-engine-migration.patch`** enables the existing one-way prepopulated search-engine migration by default. Removing bundled testing experiments must not roll back metadata already written by an earlier build. It adds a resolver regression test for migrated metadata with product defaults.
 
-All four current patches were checked together against exact-revision copies of the twenty-three affected files in isolated repositories for both the pinned revision and candidate 155.0.8059.26. Sequential indexed `git apply --check` and apply passed; the patched source passed `git diff --cached --check`; the application plist and GRIT XML parsed. The checks verified eleven disabled feature definitions, the Autofill Settings producer/consumer binding, preserved ordinary Autofill card markers and Chromium attribution headers. Reverse application returned every copied source byte to upstream and left each snapshot clean. The twenty-three inspected active-checkout files and `upstream.lock` remained byte-identical. Current evidence is in ignored `.build/password-change-gate/validation/evidence.json`; [candidate rehearsal](research/upstream-rehearsal.md) records the current patch hash. These are patch-integrity checks, **not** browser behavior proof. Separately, patch 0004's feature, service, and unit-test translation units compiled with the pinned Clang and generated baseline headers in an isolated directory. This standalone compile disabled modules and used the existing unit-test target's mock-header warning suppression; it did not run a GN target, link a test executable, execute the tests, compile candidate 155, or compile the Settings TypeScript.
+The seven-patch series passed ordered indexed apply and byte-exact reversal on 26
+files at both pinned 154 and candidate 155. Standalone GRIT generation verified
+English, British English, and French outputs with unchanged numeric resource
+IDs and unchanged non-target resources. Evidence is ignored under
+`.build/identity-string-validation` and `.build/search-migration-default`.
+The seven-patch browser compiled and passed native identity/profile checks,
+the 22-check extension fixture, synthetic native messaging, and all six manual
+extension surfaces. See [current results](STATUS.md).
+
+Disabling bundled experiments initially exposed a real startup regression:
+the earlier profile had search-engine migration metadata enabled, while the
+upstream feature's default was disabled. The resolver deliberately rejects that
+unsupported rollback and aborts in a non-official build. Protected copies of the
+full profile and a minimized search database reproduced the crash; enabling the
+single migration feature made both start. Patch 0007 preserves that non-AI
+migration default without deleting the database, changing its metadata, or
+weakening the resolver invariant. Both protected copies and the original
+development profile then launched without override flags in the rebuilt app.
+Its regression-test translation unit compiled; that new C++ test has not been
+linked or executed. The local red/green evidence is in
+`.build/repros/search-migration-summary.json`.
+
+The first four patches were also checked together against exact-revision copies of the twenty-three affected files in isolated repositories for both the pinned revision and candidate 155.0.8059.26. Sequential indexed `git apply --check` and apply passed; the patched source passed `git diff --cached --check`; the application plist and GRIT XML parsed. The checks verified eleven disabled feature definitions, the Autofill Settings producer/consumer binding, preserved ordinary Autofill card markers and Chromium attribution headers. Reverse application returned every copied source byte to upstream and left each snapshot clean. The twenty-three inspected active-checkout files and `upstream.lock` remained byte-identical. That earlier evidence is in ignored `.build/password-change-gate/validation/evidence.json`; [candidate rehearsal](research/upstream-rehearsal.md) records the current patch hash. These are patch-integrity checks, **not** browser behavior proof. Separately, patch 0004's feature, service, and unit-test translation units compiled with the pinned Clang and generated baseline headers in an isolated directory. This standalone compile disabled modules and used the existing unit-test target's mock-header warning suppression; it did not run a GN target, link a test executable, execute the tests, compile candidate 155, or compile the Settings TypeScript.
 
 ## Independent macOS identity
 
@@ -35,7 +60,7 @@ The async macOS encryption provider constructs the same common `KeychainPassword
 
 User native-host and external-extension paths already derive from `DIR_USER_DATA`, so they automatically become the chosen OpenArc profile root plus `NativeMessagingHosts` or `External Extensions`. The system directories require the separate patch above: upstream's unbranded native-host directory is Chromium-specific, while its macOS external-extension directory otherwise points at Google/Chrome for all brands. The patch neither modifies nor copies existing manifests. M1 must exercise supported host registration in the new locations and report incompatible vendor installers; silently falling back to another browser's directories would undo that explicit identity boundary. [Extension and native-messaging paths](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/common/chrome_paths.cc).
 
-The patch intentionally leaves the existing Chromium image assets and the many secondary Chromium text references in place. It establishes an independent development application; it does not constitute a complete visual-brand audit. The company/copyright attribution remains intact. A later icon/string pass must preserve required attribution and be checked in the actual built bundle.
+The patch series leaves existing Chromium image assets and secondary Chromium text references in place. Patch 0006 corrects the prominent labels observed in the first running build; this is not a complete visual-brand or localization audit. The company/copyright attribution remains intact. An original icon and remaining product labels must preserve required attribution and be checked in the actual built bundle.
 
 ### GN branding selection
 
@@ -121,7 +146,7 @@ Use bounded, versioned identifier payloads; session IDs are not durable workspac
 
 These are proposed integration steps, not implemented functionality:
 
-1. Build and launch the four patches in an isolated profile. Confirm product/bundle identity, vertical tab activation, the targeted AI defaults, normal popup behavior, regular navigation, extension actions and relaunch persistence before expanding the patch set.
+1. Build and launch the current patch series in an isolated profile. Confirm product/bundle identity, vertical tab activation, the targeted AI defaults, normal popup behavior, regular navigation, extension actions and relaunch persistence before expanding the patch set. The initial four-patch run supplied baseline evidence; the corrections in patches 0005–0006 require another run.
 2. Add a profile-scoped workspace service and a real-tab adapter with the `BROWSER-PLAN.md` state contract. Persist saved destination separately from current navigation. Keep native tab/session ownership in Chromium.
 3. Add durable Saved rows and a bottom Space selector to the existing Views region. A saved row without a live tab should be a workspace control; do not invent a Chromium tab solely to make it visible. Activation creates or focuses its real tab. Closing it removes the live tab while keeping the saved row.
 4. Extend the shared collection presentation carefully for the current Space. Keep extension-visible indices, groups, pin ordering and events truthful, even when rows from another Space are not displayed. Native pinned tabs cannot simply be renamed Saved without implementing the different lifetime semantics.

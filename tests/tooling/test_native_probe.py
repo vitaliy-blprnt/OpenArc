@@ -92,7 +92,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_install_is_scoped_idempotent_and_exact_origin_only(self):
         for mode, directory in (("baseline", "baseline"), ("development", "development"),
-                                ("reference", "fixture-reference")):
+                                ("reference", "fixture-reference"), ("packaging", "packaging")):
             installer = self.installer(mode)
             report = installer.install()
             before = installer.manifest.read_bytes()
@@ -109,7 +109,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_reference_cli_preserves_other_profiles_and_unrelated_reference_data(self):
         preserved = []
-        for directory in ("baseline", "development"):
+        for directory in ("baseline", "development", "packaging"):
             path = self.root / ".build/profiles" / directory / "NativeMessagingHosts" / (probe.HOST_NAME + ".json")
             path.parent.mkdir(parents=True)
             path.write_text("another registration")
@@ -140,14 +140,16 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(path.read_text(), "another registration")
         self.assertFalse((self.root / "Library").exists())
 
-    def test_reference_profile_symlink_cannot_redirect_registration(self):
+    def test_reference_and_packaging_symlinks_cannot_redirect_registration(self):
         baseline = self.root / ".build/profiles/baseline"
         baseline.mkdir(parents=True)
-        (baseline.parent / "fixture-reference").symlink_to(baseline, target_is_directory=True)
-        with self.assertRaisesRegex(probe.ProbeError, "symlink"):
-            self.installer("reference").install()
-        self.assertFalse((baseline / "NativeMessagingHosts").exists())
-        self.assertFalse((self.root / ".build/tools").exists())
+        for mode, directory in (("reference", "fixture-reference"), ("packaging", "packaging")):
+            with self.subTest(mode=mode):
+                (baseline.parent / directory).symlink_to(baseline, target_is_directory=True)
+                with self.assertRaisesRegex(probe.ProbeError, "symlink"):
+                    self.installer(mode).install()
+                self.assertFalse((baseline / "NativeMessagingHosts").exists())
+                self.assertFalse((self.root / ".build/tools").exists())
 
     def test_uninstall_removes_only_matching_owned_files(self):
         installer = self.installer()

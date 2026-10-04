@@ -6,7 +6,7 @@ Prepared 3 October 2026. Implementation authorized. This document is the product
 
 Build OpenArc as an open-source, macOS-first browser and a small, maintained fork of Chromium's browser application. Start with the owner's personal workflow while making the project buildable and maintainable by others. Keep Chromium's rendering, navigation, extension, profile, permission, and security machinery. Change the browser interface and add a durable model for Spaces and saved tabs.
 
-The main experience is a left sidebar with permanent saved tabs above a divider and ordinary open tabs below it. Saved tabs open in place. Spaces provide separate working contexts. There are no AI features.
+The intended experience is a left sidebar with permanent saved tabs above a divider and ordinary open tabs below it. Saved tabs open in place. Spaces provide separate working contexts. Browser AI is outside the product scope; complete no-AI acceptance has not yet been established.
 
 ### Confirmed requirements
 
@@ -169,7 +169,14 @@ Google account sync, Google API entitlements, Safe Browsing service configuratio
 
 ## Dependency-ordered implementation milestones
 
-Each milestone produces a reviewable checkpoint and evidence. Milestones describe future work; none is marked implemented. Record the pinned upstream revision, exact build, test outputs, unresolved defects, and decision changes in a status file during execution.
+Each milestone produces a reviewable checkpoint and evidence. Start gates permit
+bounded work; acceptance gates determine when a milestone is complete. Record
+the pinned upstream revision, exact build, test outputs, unresolved defects, and
+decision changes in [STATUS.md](STATUS.md). M0 is complete for the documented
+local development build. The seven-patch build and extension fixture provide a
+working basis for bounded M3 model work, while M1 and M2 acceptance remain open.
+Starting that work does not qualify signing, vendor trust, update delivery, or a
+large custom shell.
 
 ### M0 — Open-source foundation and macOS baseline
 
@@ -189,7 +196,9 @@ Each milestone produces a reviewable checkpoint and evidence. Milestones describ
 
 ### M2 — Prove an upstream update can be delivered
 
-**Requires:** M0–M1. **Read:** pinned build configuration and release-tooling sources.
+**Start gate:** M0; source rehearsals and isolated candidate builds can proceed
+alongside M1. **Acceptance dependency:** M1. **Read:** pinned build configuration
+and release-tooling sources.
 
 **Change:** add one minimal browser-UI patch, advance to another appropriate stable upstream revision, reapply it, rebuild, and rerun the extension baseline. Define how security releases are detected, reviewed, packaged, signed, and delivered. Add contribution/build guidance, a private security-reporting route, and CI checks with release credentials isolated from pull-request jobs.
 
@@ -197,15 +206,33 @@ Each milestone produces a reviewable checkpoint and evidence. Milestones describ
 
 ### M3 — Durable Space and saved-tab model
 
-**Requires:** M2. **Read:** interaction/data contracts above, Chromium bookmark, profile, tab, and session code at the pinned ref.
+**Start gate:** M0 and an actual development-build extension fixture baseline.
+The current seven-patch build satisfies this start gate. Bounded native model,
+bookmark-observer, codec, reconciliation and isolated-test work can proceed
+without waiting for signed vendor integration or upgrade delivery.
+**Acceptance dependencies:** full M1 and M2 acceptance remain required before
+declaring M3 complete or expanding into a large custom shell. **Read:**
+interaction/data contracts above, Chromium bookmark, profile, tab, and session
+code at the pinned ref.
 
 **Change:** implement the workspace service, stable IDs, ownership rules, schema versioning, migration, and tab adapter. Define ordering across window sessions, extension-visible indices/pin/group behavior, and reconciliation after an interrupted save. Use transactional or journaled metadata changes for operations that span stores.
 
-**Done when:** meaningful model tests prove saved URL/current URL separation, close versus remove, duplicate URLs, reordering, multiple windows, saved-instance transfer collisions, extension bookmark edits, restore reconciliation, failed migration recovery, and private-session non-persistence without losing the previous recoverable state.
+**Done when:** M1 and M2 are accepted and meaningful model/integration tests prove
+saved URL/current URL separation, close versus remove, duplicate URLs,
+reordering, multiple windows, saved-instance transfer collisions, extension
+bookmark edits, restore reconciliation, failed migration recovery, and
+private-session non-persistence without losing the previous recoverable state.
+Standalone helper tests are evidence for their named modules, not this full gate.
 
 ### M4 — Working sidebar and saved tabs
 
-**Requires:** M3. **Read:** verified vertical-tab components and Arc visual/interaction research.
+**Start gate:** the relevant default-Space model invariants and core extension
+regression baseline pass on the actual development build. This permits one
+bounded Saved/open-section development slice using the existing vertical region,
+toolbar and extension surfaces; it need not wait for external vendor credentials
+or release delivery. **Acceptance dependencies:** broad custom-shell work and
+full M4 acceptance still require accepted M1–M3. **Read:** verified vertical-tab
+components and Arc visual/interaction research.
 
 **Change:** show real tabs in the left sidebar; implement saved/open sections, saved-tab activation, closing/unpinning, folders, drag and drop, context menus, loading/audio/crash states, resize, collapse, and reachable extension actions.
 

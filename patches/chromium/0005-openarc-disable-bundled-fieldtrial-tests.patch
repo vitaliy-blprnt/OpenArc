@@ -1,0 +1,14 @@
+diff --git a/components/variations/service/BUILD.gn b/components/variations/service/BUILD.gn
+--- a/components/variations/service/BUILD.gn
++++ b/components/variations/service/BUILD.gn
+@@ -11,7 +11,9 @@ declare_args() {
+   # Note: For Chrome-branded Android builds, this is always considered as set to
+   # true (see below). This is done to avoid the binary size impact (~40 KiB) on
+   # Android.
+-  disable_fieldtrial_testing_config = false
++  # OpenArc uses product defaults instead of bundled test experiments, which can
++  # otherwise re-enable browser AI features in unbranded builds.
++  disable_fieldtrial_testing_config = true
+ 
+   # Set to true to make a build that force enables activation of field trial
+   # tests specified in testing/variations/fieldtrial_testing_config.json.

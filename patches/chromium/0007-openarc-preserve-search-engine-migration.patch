@@ -1,0 +1,53 @@
+diff --git a/components/regional_capabilities/regional_capabilities_switches.cc b/components/regional_capabilities/regional_capabilities_switches.cc
+--- a/components/regional_capabilities/regional_capabilities_switches.cc
++++ b/components/regional_capabilities/regional_capabilities_switches.cc
+@@ -40,7 +40,9 @@
+ BASE_FEATURE(kStrictAssociatedCountriesCheck,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kPrepopulatedEnginesMigration, base::FEATURE_DISABLED_BY_DEFAULT);
++// OpenArc keeps this one-way migration enabled after removing bundled test
++// experiments. Profiles migrated by earlier builds do not support rollback.
++BASE_FEATURE(kPrepopulatedEnginesMigration, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kPrepopulatedEnginesShadowVariants,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+diff --git a/components/search_engines/template_url_prepopulate_data_unittest.cc b/components/search_engines/template_url_prepopulate_data_unittest.cc
+--- a/components/search_engines/template_url_prepopulate_data_unittest.cc
++++ b/components/search_engines/template_url_prepopulate_data_unittest.cc
+@@ -1259,6 +1259,35 @@
+             TemplateURL(*deprecated_data).GetEngineType(SearchTermsData()));
+   EXPECT_EQ(legacy_type,
+             TemplateURL(*new_data).GetEngineType(SearchTermsData()));
++}
++
++TEST_F(TemplateURLPrepopulateDataTest,
++       OpenArcDefaultsPreserveMigratedDatabaseMetadata) {
++  // Exercise product defaults, without bundled experiments or test-runner
++  // feature overrides masking a rollback of the persisted migration state.
++  base::test::ScopedFeatureList feature_list;
++  feature_list.InitWithEmptyFeatureAndFieldTrialLists();
++  OverrideCountryId(CountryId("DE"));
++
++  WDKeywordsResult::Metadata database_metadata;
++  database_metadata.builtin_keyword_data_version = kCurrentDataVersion;
++  database_metadata.builtin_keyword_country =
++      regional_capabilities::CountryIdHolder(CountryId("US"));
++  database_metadata.prepopulated_engines_migration_state.Put(
++      KeywordTable::PrepopulatedEngineMigration::kMigration);
++
++  // A regional refresh must retain the migration already recorded by an older
++  // OpenArc build. With the old default, this call hits the rollback invariant
++  // (fatal in non-official builds), or returns downgraded metadata otherwise.
++  const auto updated =
++      prepopulate_data_resolver().ComputeDatabaseUpdateRequirements(
++          database_metadata);
++  ASSERT_TRUE(updated.has_value());
++  EXPECT_EQ(updated->country_id,
++            regional_capabilities::CountryIdHolder(CountryId("DE")));
++  EXPECT_EQ(updated->data_version, kCurrentDataVersion);
++  EXPECT_EQ(updated->prepopulated_engines_migration_state,
++            database_metadata.prepopulated_engines_migration_state);
+ }
+ 
+ struct UpdateRequirementsTestParams {

@@ -119,6 +119,49 @@ to restore a baseline. Its seed remains bound to the original lock/dependencies;
 an upstream change requires a separately reviewed output transition. These
 receipts establish compilation provenance, not runtime or release qualification.
 
+### Build a separate non-component packaging candidate
+
+The pinned Chromium signing workflow requires `is_component_build=false`.
+After applying the full OpenArc patch series, build its separate candidate and
+matching upstream signing-support files with:
+
+```sh
+python3 scripts/openarc.py build --packaging --jobs 8
+python3 scripts/openarc.py launch --packaging
+```
+
+This mode always uses `out/Packaging`, including when development output has
+already been promoted to `out/Baseline`. It never reuses or promotes the baseline.
+It requires the applied OpenArc product identity and builds both `chrome` and
+`chrome/installer/mac`; the latter generates the matching `OpenArc Packaging`
+directory containing signing scripts, configuration, and entitlement inputs.
+The build itself does not invoke those signing scripts or create a DMG/PKG.
+
+The only GN argument override is `is_component_build=false`. Every other argument
+comes from `upstream.lock`, which must explicitly retain `is_debug=false` and
+`is_official_build=false`. An incompatible configuration fails before generation
+or invalidating an existing packaging receipt.
+The original lock is unchanged. A dedicated `.build/packaging-build-info.json`
+receipt records the original lock, full applied patches, source/dependency
+evidence, effective GN arguments, output path, executable hash, and bundle
+metadata hash. A failed packaging rebuild invalidates only this mode's receipt;
+development/baseline receipts and promotion evidence remain intact.
+
+`launch --packaging` requires that dedicated receipt and `OpenArc.app`, verifies
+its inputs and binary identity, and uses `.build/profiles/packaging` with
+`.build/logs/packaging-launch.log`. It does not reuse the development or baseline
+profile or enable the baseline mock Keychain. The `--baseline`,
+`--reuse-baseline`, and `--packaging` build options are mutually exclusive;
+baseline and packaging launch modes are also mutually exclusive. The lock's
+normal `output_dir` cannot select the reserved `out/Packaging` directory.
+
+This is a candidate for separately reviewed signing and vendor-trust testing,
+not a release-qualified artifact. The receipt is compilation evidence, not a
+signed-artifact receipt; later signing can change executable hashes and invalidate
+its launch authorization. Runtime, signing, notarization, and password-manager
+trust still require their own evidence. The existing development build is kept
+separate throughout.
+
 ### Remove the recorded patch overlay
 
 For planned maintenance, after stopping builds and closing browsers using the
@@ -167,6 +210,10 @@ The tooling keeps its workspace under the repository's `.build` directory:
 | `.build/chromium/src/out/Baseline` | Unmodified baseline output, or explicitly promoted incremental OpenArc output |
 | `.build/profiles/baseline` | Isolated baseline browser data |
 | `.build/baseline-promotion.json` | Promoted output ownership and historical baseline receipt |
+| `.build/chromium/src/out/Packaging` | Separate non-component OpenArc candidate and matching upstream signing inputs |
+| `.build/packaging-build-info.json` | Dedicated candidate receipt including effective GN arguments |
+| `.build/profiles/packaging` | Isolated packaging-candidate browser data |
+| `.build/logs/packaging-launch.log` | Packaging-candidate LaunchServices diagnostics |
 
 Do not use arbitrary environment overrides or local GN edits as release evidence.
 Record every intentional configuration change and its source revision. A
@@ -237,8 +284,9 @@ native password-manager trust in the final signed app. A finite test suite is no
 a claim that every extension works. Report the scope of evidence and unresolved
 failures explicitly.
 
-Packaging, signing, notarization, production profile identity, and automatic
-updates are not provided by the initial build CLI. Follow the separate
+DMG/PKG creation, signing, notarization, production profile identity, and automatic
+updates remain outside this build CLI. `--packaging` builds the candidate and
+matching upstream signing inputs only. Follow the separate
 [release contract](RELEASING.md) before publishing or claiming a qualified release.
 
 ## Diagnose failures

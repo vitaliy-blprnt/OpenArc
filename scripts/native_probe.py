@@ -23,7 +23,7 @@ MAX_NONCE_BYTES = 128
 EXTENSION_ID = re.compile(r"[a-p]{32}\Z")
 HEADER = struct.Struct("=I")  # Native byte order, exactly four bytes.
 PROFILE_DIRECTORIES = {"baseline": "baseline", "development": "development",
-                       "reference": "fixture-reference"}
+                       "reference": "fixture-reference", "packaging": "packaging"}
 
 
 class ProbeError(Exception):
@@ -112,7 +112,7 @@ def host_main(reader: BinaryIO, writer: BinaryIO, errors: TextIO) -> int:
 class Installer:
     def __init__(self, root: Path, mode: str, extension_id: str):
         if mode not in PROFILE_DIRECTORIES:
-            raise ProbeError("Mode must be baseline, development or reference")
+            raise ProbeError("Mode must be baseline, development, reference or packaging")
         if not EXTENSION_ID.fullmatch(extension_id):
             raise ProbeError("Extension ID must contain exactly 32 lowercase letters a through p")
         self.root = root.resolve()
