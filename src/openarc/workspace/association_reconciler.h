@@ -8,14 +8,10 @@
 
 #include "base/containers/span.h"
 #include "base/types/expected.h"
-#include "base/types/strong_alias.h"
-#include "base/uuid.h"
 #include "components/sessions/core/session_id.h"
+#include "openarc/workspace/workspace_ids.h"
 
 namespace openarc::workspace {
-
-using SpaceId = base::StrongAlias<class SpaceIdTag, base::Uuid>;
-using EntryId = base::StrongAlias<class EntryIdTag, base::Uuid>;
 
 // Supplied only after BookmarkModel loading and copied-ID reconciliation. This
 // is an identifier-only snapshot of authority, not a bookmark or tab registry.

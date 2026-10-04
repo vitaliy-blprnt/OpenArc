@@ -7,6 +7,7 @@ source_set("association_reconciler") {
   sources = [
     "association_reconciler.cc",
     "association_reconciler.h",
+    "workspace_ids.h",
   ]
   public_deps = [
     "//base",
@@ -14,11 +15,24 @@ source_set("association_reconciler") {
   ]
 }
 
+source_set("tab_session_codec") {
+  sources = [
+    "tab_session_codec.cc",
+    "tab_session_codec.h",
+    "workspace_ids.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 source_set("association_reconciler_unittests") {
   testonly = true
-  sources = [ "association_reconciler_unittest.cc" ]
+  sources = [
+    "association_reconciler_unittest.cc",
+    "tab_session_codec_unittest.cc",
+  ]
   deps = [
     ":association_reconciler",
+    ":tab_session_codec",
     "//testing/gtest",
   ]
 }

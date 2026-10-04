@@ -36,7 +36,7 @@ does not promise this revision remains current after this checkpoint.
 | Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
 | Tooling test suite | 67 tests passed locally, including build provenance, baseline output reuse, dependency inventory/bootstrap, isolated native-host safeguards, and read-only upstream checks |
 | Extension fixture scope guards | 21 Node tests passed; includes browser timer receiver binding, pin/group checks, and interrupted group cleanup guards |
-| Native association helper | 12 C++ tests passed after standalone compilation with the pinned Chromium Clang, headers, libbase, and libc++; the documented recipe was executed. GN/browser integration has not been run |
+| Native model preparation | 24 C++ tests passed for association reconciliation and the bounded tab-session codec after standalone compilation with the pinned Chromium Clang, headers, libbase, and libc++; the documented recipe was executed. GN/browser integration has not been run |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
 | Hosted source checks | Passed on Linux/macOS for checkpoint `f718cc8`, including 67 Python and 21 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37177446663)); native helper compilation is separate local evidence |
 | Chromium baseline build | GN generation passed; compilation in progress |
@@ -44,7 +44,7 @@ does not promise this revision remains current after this checkpoint.
 | Visible OpenArc browser UI | Not tested |
 | Reference-browser fixture | Fixture 0.1.0: 19 API checks and synthetic native nonce/pong exchange passed in installed Chrome 154.0.8037.59 (ARM64), with mock Keychain and a dedicated profile; popup rendering, user-gesture side panel, side-panel dashboard action, and Options entry observed. Fixture 0.2.0 adds pin/group checks (21 total); its browser run is pending |
 | OpenArc Chrome Web Store / extension runtime / native integration | Not tested; reference-browser fixture results do not qualify OpenArc |
-| Arc-style saved tabs and Spaces | Browser features not implemented; pure identifier reconciliation helper prepared under `src/openarc/workspace` |
+| Arc-style saved tabs and Spaces | Browser features not implemented; pure identifier reconciliation and tab-session codec prepared under `src/openarc/workspace` |
 | Signed release and updater | Not implemented |
 
 The optional `build --reuse-baseline` transition has tooling coverage. It keeps

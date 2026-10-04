@@ -1,4 +1,4 @@
-# Association reconciler preparation
+# Workspace helper preparation
 
 `ReconcileAssociations` is a pure helper over identifier snapshots supplied by a
 future browser adapter. Its header documents validation, caller priority order,
@@ -9,6 +9,26 @@ This is preparation for the saved-tab model, **not M3 completion**. The local
 `BUILD.gn` describes proposed targets; no overlay or Chromium target includes it
 yet, and it has not been built through GN. Browser, session, BookmarkModel,
 private-window, and extension integration remain unverified.
+
+`EncodeTabSessionMetadata` and `DecodeTabSessionMetadata` are a tab-only JSON
+codec. Version 1 uses exact arrays: `[1,"unbound"]`, `[1,"bound","space-uuid"]`,
+or `[1,"bound","space-uuid","entry-uuid"]`. The fixed shape avoids duplicate
+object-key ambiguity in the upstream JSON reader. It accepts RFC JSON whitespace,
+requires lowercase valid UUIDs, rejects unknown versions/types/fields, limits
+payloads to 256 UTF-8 bytes, and emits only version/state/identifiers.
+
+Unbound clears the entire workspace association, including its Space. Removing
+only the saved-entry association must encode a bound record that retains the
+`SpaceId` and has no `EntryId`; saved-tab demotion must not clear Space affiliation.
+
+Encoding requires an explicit profile context and refuses all off-the-record
+values, including an explicit clear. Decoding only interprets caller-owned bytes;
+it performs no persistence. An absent SessionService key is a caller decision;
+an empty or malformed present value is an error. Retain rejected/future-schema
+data through the caller's recovery mechanism and do not replace an error with
+an encoded unbound/default value. The caller still must select the actual
+profile context and prevent private writes. This helper does not prove private
+non-persistence in a browser, window restore, or any session integration.
 
 ## Standalone native test recipe
 
@@ -56,6 +76,8 @@ mkdir -p "$test_output"
   -I "$chromium_root/third_party/googletest/src/googletest/include" \
   "$repo_root/src/openarc/workspace/association_reconciler.cc" \
   "$repo_root/src/openarc/workspace/association_reconciler_unittest.cc" \
+  "$repo_root/src/openarc/workspace/tab_session_codec.cc" \
+  "$repo_root/src/openarc/workspace/tab_session_codec_unittest.cc" \
   "$chromium_root/third_party/googletest/src/googletest/src/gtest-all.cc" \
   "$chromium_root/third_party/googletest/src/googletest/src/gtest_main.cc" \
   -L "$component_output" -lbase -lc++_chrome \
@@ -72,4 +94,7 @@ local run belong in ignored output, not public test evidence.
 The tests exercise current bookmark scope, default-Space fallback, missing-entry
 demotion, caller-ordered collision priority, independent windows/entries,
 invalid authority and real-tab identities, whole-result failure, immutability,
-and idempotence. Passing this executable establishes helper behavior only.
+and idempotence. Codec cases additionally cover bound/unbound round trips,
+invalid identifiers, schema/type confusion, unknown fields, size/UTF-8 limits,
+strict JSON syntax, and private-context encode refusal. Passing this executable
+establishes helper behavior only.
