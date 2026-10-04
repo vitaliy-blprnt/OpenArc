@@ -57,10 +57,13 @@ class WorkflowTests(unittest.TestCase):
         git(repo, "config", "core.hooksPath", os.devnull)
         git(repo, "config", "core.autocrlf", "false")
         (repo / "example.txt").write_text("base\n")
-        (repo / ".gitignore").write_text("out/\n")
+        (repo / ".gitignore").write_text("out/\nthird_party/\n")
         git(repo, "add", ".")
         git(repo, "commit", "-m", "fixture")
         self.lock["chromium"]["revision"] = git(repo, "rev-parse", "HEAD")
+        git(repo, "clone", "--local", str(repo), str(repo.parent.parent / "depot_tools"))
+        self.lock["depot_tools"]["revision"] = self.lock["chromium"]["revision"]
+        (repo.parent / ".gclient_entries").write_text("entries = " + repr({"src": openarc.CHROMIUM_URL}) + "\n")
         self.write_lock()
         return repo
 
@@ -79,6 +82,31 @@ class WorkflowTests(unittest.TestCase):
         executable.write_text("#!/bin/sh\nexit 0\n")
         executable.chmod(0o755)
         return executable
+
+    def simulated_build(self, workflow, baseline=False):
+        """Run real validation/receipts with only GN/compiler invocation simulated."""
+        real_run = workflow.run
+
+        def runner(args, **kwargs):
+            if args[0] in (str(workflow.depot / "gn"), str(workflow.depot / "autoninja")):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
+                patch.object(workflow, "run", side_effect=runner):
+            workflow.build(2, baseline)
+
+    def add_dependency(self, repo):
+        dependency = repo / "third_party" / "example"
+        dependency.parent.mkdir(parents=True)
+        git(repo, "clone", "--local", str(repo), str(dependency))
+        git(dependency, "config", "user.name", "OpenArc Tooling Test")
+        git(dependency, "config", "user.email", "test@example.invalid")
+        git(dependency, "config", "commit.gpgsign", "false")
+        git(dependency, "config", "core.hooksPath", os.devnull)
+        (repo.parent / ".gclient_entries").write_text("entries = " + repr({
+            "src": openarc.CHROMIUM_URL, "src/third_party/example": openarc.CHROMIUM_URL}) + "\n")
+        return dependency
 
     def test_static_check_needs_no_checkout_or_macos(self):
         with patch.object(openarc.sys, "platform", "linux"):
@@ -203,11 +231,13 @@ class WorkflowTests(unittest.TestCase):
         self.repository()
         workflow = self.workflow()
         executable = self.executable(workflow)
+        self.simulated_build(workflow)
         command = workflow.launch_command("https://example.com")
         self.assertEqual(command[0], str(executable))
         self.assertIn("--user-data-dir=" + str(self.root / ".build/profiles/development"), command)
         self.assertIn("--no-default-browser-check", command)
         self.assertNotIn("--no-sandbox", command)
+        self.assertNotIn("--use-mock-keychain", command)
         self.assertEqual(command[-1], "https://example.com")
         for url in ("--no-sandbox", "file:///private/data", "javascript:alert(1)", "https://"):
             with self.assertRaisesRegex(openarc.WorkflowError, "HTTP|http"):
@@ -217,6 +247,7 @@ class WorkflowTests(unittest.TestCase):
         self.repository()
         workflow = self.workflow()
         self.executable(workflow)
+        self.simulated_build(workflow)
         profiles = self.root / ".build/profiles"
         profiles.mkdir()
         elsewhere = self.root / "existing-browser"
@@ -248,6 +279,7 @@ class WorkflowTests(unittest.TestCase):
     def test_build_passes_locked_arguments_without_shell_or_remote_execution(self):
         self.repository()
         workflow = self.workflow()
+        self.executable(workflow)
         calls = []
 
         def fake_run(args, **kwargs):
@@ -269,8 +301,6 @@ class WorkflowTests(unittest.TestCase):
         repo = self.repository()
         self.add_patch("01.patch", "base", "first")
         workflow = self.workflow()
-        workflow.depot.mkdir()
-        git(workflow.depot, "init")
         with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
                 patch.object(workflow, "assert_pin"):
             with self.assertRaisesRegex(openarc.WorkflowError, "not fully applied"):
@@ -287,9 +317,105 @@ class WorkflowTests(unittest.TestCase):
         executable.parent.mkdir(parents=True)
         executable.write_text("#!/bin/sh\nexit 0\n")
         executable.chmod(0o755)
+        self.simulated_build(workflow, baseline=True)
         command = workflow.launch_command(baseline=True)
         self.assertEqual(command[0], str(executable))
         self.assertIn("--user-data-dir=" + str(self.root / ".build/profiles/baseline"), command)
+        self.assertIn("--use-mock-keychain", command)
+
+    def test_launch_requires_successful_build_receipt(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow)
+        with self.assertRaisesRegex(openarc.WorkflowError, "successful build receipt"):
+            workflow.launch_command()
+
+    def test_launch_rejects_binary_changed_after_successful_build(self):
+        self.repository()
+        workflow = self.workflow()
+        executable = self.executable(workflow)
+        self.simulated_build(workflow)
+        executable.write_text("changed executable\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "executable or bundle identity changed"):
+            workflow.launch_command()
+
+    def test_launch_rejects_changed_lock_configuration(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        self.lock["build"]["gn_args"]["is_debug"] = True
+        self.write_lock()
+        with self.assertRaisesRegex(openarc.WorkflowError, "does not match"):
+            self.workflow().launch_command()
+
+    def test_launch_rejects_newly_applied_patches_until_rebuilt(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        self.add_patch("01.patch", "base", "first")
+        workflow.apply()
+        with self.assertRaisesRegex(openarc.WorkflowError, "does not match"):
+            workflow.launch_command()
+
+    def test_failed_rebuild_invalidates_previous_success(self):
+        self.repository()
+        workflow = self.workflow()
+        executable = self.executable(workflow)
+        self.simulated_build(workflow)
+        real_run = workflow.run
+
+        def fail_compilation(args, **kwargs):
+            if args[0] == str(workflow.depot / "gn"):
+                raise openarc.WorkflowError("simulated GN failure")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
+                patch.object(workflow, "run", side_effect=fail_compilation):
+            with self.assertRaisesRegex(openarc.WorkflowError, "simulated GN failure"):
+                workflow.build(2)
+        self.assertTrue(executable.exists())
+        self.assertFalse(workflow.build_receipt_path(False).exists())
+        with self.assertRaisesRegex(openarc.WorkflowError, "successful build receipt"):
+            workflow.launch_command()
+
+    def test_build_rejects_missing_dependency_inventory(self):
+        repo = self.repository()
+        (repo.parent / ".gclient_entries").unlink()
+        workflow = self.workflow()
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"):
+            with self.assertRaisesRegex(openarc.WorkflowError, "dependency inventory"):
+                workflow.build(2)
+
+    def test_build_rejects_dirty_dependency_and_preserves_it(self):
+        repo = self.repository()
+        dependency = self.add_dependency(repo)
+        (dependency / "example.txt").write_text("valuable dependency work\n")
+        workflow = self.workflow()
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"):
+            with self.assertRaisesRegex(openarc.WorkflowError, "Preserving modified checkout"):
+                workflow.build(2)
+        self.assertEqual((dependency / "example.txt").read_text(), "valuable dependency work\n")
+
+    def test_launch_rejects_changed_dependency_revision(self):
+        repo = self.repository()
+        dependency = self.add_dependency(repo)
+        workflow = self.workflow()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        git(dependency, "commit", "--allow-empty", "-m", "new dependency revision")
+        with self.assertRaisesRegex(openarc.WorkflowError, "does not match"):
+            workflow.launch_command()
+
+    def test_build_rejects_missing_dependency_directory(self):
+        repo = self.repository()
+        (repo.parent / ".gclient_entries").write_text("entries = " + repr({
+            "src": openarc.CHROMIUM_URL, "src/third_party/missing": openarc.CHROMIUM_URL}) + "\n")
+        workflow = self.workflow()
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"):
+            with self.assertRaisesRegex(openarc.WorkflowError, "Missing dependency directory"):
+                workflow.build(2)
 
 
 if __name__ == "__main__":

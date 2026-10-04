@@ -35,6 +35,14 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def file_digest(path: Path) -> str:
+    result = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            result.update(chunk)
+    return result.hexdigest()
+
+
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # A unique temporary file avoids overwriting a user's stale .tmp file or
@@ -240,25 +248,51 @@ class Workflow:
         self.checkout_repo(self.src, "chromium")
         print("Pinned source checkouts ready. Run sync to fetch dependencies and run hooks.")
 
-    def dependency_repos(self) -> list[Path]:
+    def dependency_entries(self, required: bool = False) -> dict:
         entries = self.safe_path(self.checkout / ".gclient_entries")
         if not entries.exists():
-            return []
+            if required:
+                raise WorkflowError("Missing completed .gclient_entries dependency inventory; finish sync before building or launching")
+            return {}
         try:
             tree = ast.parse(entries.read_text())
             value = next(node.value for node in tree.body if isinstance(node, ast.Assign)
                          and any(isinstance(target, ast.Name) and target.id == "entries" for target in node.targets))
             mapping = ast.literal_eval(value)
-            if not isinstance(mapping, dict):
+            if not isinstance(mapping, dict) or (required and not mapping):
                 raise ValueError("entries must be a dictionary")
         except (OSError, ValueError, SyntaxError, StopIteration) as exc:
             raise WorkflowError(f"Cannot safely inspect .gclient_entries: {exc}") from exc
+        for name, value in mapping.items():
+            path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
+            if value is not None and not isinstance(value, str):
+                raise WorkflowError(f"Invalid dependency inventory entry: {name}")
+            if required and value is not None:
+                if not path.is_dir():
+                    raise WorkflowError(f"Missing dependency directory: {name}; finish sync")
+                if value.split("@", 1)[0].rstrip("/").endswith(".git") and not (path / ".git").exists():
+                    raise WorkflowError(f"Missing Git dependency checkout: {name}; finish sync")
+        return mapping
+
+    def dependency_repos(self) -> list[Path]:
         repos = []
-        for name in mapping:
+        for name in self.dependency_entries():
             path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
             if (path / ".git").exists() and path != self.src:
                 repos.append(path)
         return repos
+
+    def dependency_evidence(self) -> dict:
+        entries = self.dependency_entries(required=True)
+        revisions = {}
+        for name, value in sorted(entries.items()):
+            if value is None:
+                continue
+            path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
+            if path != self.src and (path / ".git").exists():
+                self.assert_clean(path)
+                revisions[name] = self.revision(path)
+        return {"entries": entries, "git_revisions": revisions}
 
     def sync(self) -> None:
         self.ensure_space(40)
@@ -344,6 +378,34 @@ class Workflow:
         if sys.platform != "darwin" or platform.machine() != "arm64":
             raise WorkflowError("Build and launch currently require an Apple Silicon Mac")
 
+    def build_receipt_path(self, baseline: bool) -> Path:
+        return self.safe_path(self.work / ("baseline-build-info.json" if baseline else "build-info.json"))
+
+    def build_inputs(self, baseline: bool) -> dict:
+        self.assert_pin(self.src, "chromium")
+        try:
+            current_lock = json.loads((self.root / "upstream.lock").read_text())
+        except (OSError, ValueError) as exc:
+            raise WorkflowError(f"Cannot revalidate upstream.lock: {exc}") from exc
+        if current_lock != self.lock:
+            raise WorkflowError("upstream.lock changed during the operation; rerun with the new configuration")
+        if baseline:
+            self.assert_clean(self.src)
+            applied = []
+        else:
+            patches = self.patches()
+            state = self.patch_state(patches)
+            if len(state["applied"]) != len(patches):
+                raise WorkflowError("Patch series is not fully applied; run apply before build, or use --baseline for clean upstream")
+            applied = state["applied"]
+        return {"baseline": baseline, "upstream": self.lock, "patches": applied,
+                "checkout_diff_sha256": self.tree_digest(), "dependencies": self.dependency_evidence()}
+
+    def binary_identity(self, executable: Path) -> dict:
+        info = self.safe_path(executable.parent.parent / "Info.plist")
+        return {"path": str(executable.relative_to(self.src)), "sha256": file_digest(executable),
+                "info_plist_sha256": file_digest(info) if info.is_file() else None}
+
     def build(self, jobs: int, baseline: bool = False) -> None:
         self.require_mac()
         if not 1 <= jobs <= 64:
@@ -352,23 +414,38 @@ class Workflow:
         self.assert_pin(self.depot, "depot_tools")
         self.assert_pin(self.src, "chromium")
         self.assert_clean(self.depot)
-        if baseline:
-            self.assert_clean(self.src)
-        else:
-            patches = self.patches()
-            state = self.patch_state(patches)
-            if len(state["applied"]) != len(patches):
-                raise WorkflowError("Patch series is not fully applied; run apply before build, or use --baseline for clean upstream")
+        inputs = self.build_inputs(baseline)
         output = self.baseline_output if baseline else self.output
         output_relative = str(output.relative_to(self.src))
         args = "\n".join(f"{name} = {gn_value(value)}" for name, value in sorted(self.lock["build"]["gn_args"].items()))
+        receipt_path = self.build_receipt_path(baseline)
+        # Once compilation starts, an earlier success must not qualify binaries
+        # left behind by a failed or interrupted rebuild.
+        receipt_path.unlink(missing_ok=True)
         self.run([str(self.depot / "gn"), "gen", output_relative, "--args=" + args], cwd=self.src)
         self.run([str(self.depot / "autoninja"), "-C", output_relative, "-j", str(jobs), "chrome"], cwd=self.src)
-        atomic_json(self.safe_path(self.work / ("baseline-build-info.json" if baseline else "build-info.json")), {
-            "upstream": self.lock, "checkout_diff_sha256": self.tree_digest(), "jobs": jobs,
-            "baseline": baseline, "output": output_relative,
+        if self.build_inputs(baseline) != inputs:
+            raise WorkflowError("Source, patch series or dependency inventory changed during the build; no successful receipt recorded")
+        atomic_json(receipt_path, {
+            "receipt_version": 1, "inputs": inputs, "binary": self.binary_identity(self.executable(baseline)),
+            "jobs": jobs, "output": output_relative,
             "qualification": "Compilation succeeded; runtime, extensions, signing and release qualification remain separate."})
         print(f"Build completed: {output}")
+
+    def verified_executable(self, baseline: bool) -> Path:
+        receipt_path = self.build_receipt_path(baseline)
+        try:
+            receipt = json.loads(receipt_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("No readable successful build receipt for this mode; run build"
+                                + (" --baseline" if baseline else "") + " before launch") from exc
+        if (not isinstance(receipt, dict) or receipt.get("receipt_version") != 1
+                or receipt.get("inputs") != self.build_inputs(baseline)):
+            raise WorkflowError("Successful build receipt does not match the current mode, lock, patches or dependencies; rebuild before launch")
+        executable = self.executable(baseline)
+        if receipt.get("binary") != self.binary_identity(executable):
+            raise WorkflowError("Browser executable or bundle identity changed since the successful build; rebuild before launch")
+        return executable
 
     def executable(self, baseline: bool = False) -> Path:
         output = self.baseline_output if baseline else self.output
@@ -381,10 +458,12 @@ class Workflow:
         return found[0]
 
     def launch_command(self, url: str | None = None, baseline: bool = False) -> list[str]:
-        self.assert_pin(self.src, "chromium")
+        executable = self.verified_executable(baseline)
         profile = self.safe_path(self.work / "profiles" / ("baseline" if baseline else "development"))
         profile.mkdir(parents=True, exist_ok=True)
-        args = [str(self.executable(baseline)), "--user-data-dir=" + str(profile), "--no-first-run", "--no-default-browser-check"]
+        args = [str(executable), "--user-data-dir=" + str(profile), "--no-first-run", "--no-default-browser-check"]
+        if baseline:
+            args.append("--use-mock-keychain")
         if url:
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -400,8 +479,11 @@ class Workflow:
         with log_path.open("ab") as log:
             child = subprocess.Popen(args, cwd=self.src, env=self.env, stdin=subprocess.DEVNULL,
                                      stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        qualification = "Process started; visible UI and browsing have not been verified by this command."
+        if baseline:
+            qualification += " Baseline uses a mock Keychain and a synthetic test profile only: do not enter real credentials. Credential storage and native password-manager qualification are excluded."
         print(json.dumps({"pid": child.pid, "command": args, "log": str(log_path),
-                          "qualification": "Process started; visible UI and browsing have not been verified by this command."}, indent=2))
+                          "qualification": qualification}, indent=2))
 
     def check(self, checkout: bool = False) -> None:
         patches = self.patches()

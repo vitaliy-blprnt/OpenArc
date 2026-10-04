@@ -76,6 +76,9 @@ python3 scripts/openarc.py launch --baseline
 The baseline uses `out/Baseline` and `.build/profiles/baseline`; it must have a
 clean Chromium checkout. Normal `build` requires the complete recorded OpenArc
 patch series. Do not reverse or discard local changes merely to rerun a baseline.
+Baseline launch uses Chromium's mock Keychain so it cannot access an existing
+Chromium Safe Storage entry. Use synthetic browsing data only in that mode; it
+does not qualify credential storage or native password-manager integration.
 
 The exact upstream revisions and GN arguments live in [`upstream.lock`](../upstream.lock).
 The initial configuration targets `arm64`, uses a non-debug component build, sets
@@ -116,6 +119,10 @@ python3 scripts/openarc.py launch https://example.com/
 The launcher uses `.build/profiles/development` and locates exactly one expected
 Chromium/OpenArc application binary in the build output. It refuses ambiguous
 application output and does not accept an external `--user-data-dir` override.
+It also requires a successful build receipt matching the lock, patch state,
+dependency revisions, executable, and bundle metadata. A failed rebuild
+invalidates the prior receipt; it cannot silently launch an older binary under
+new source evidence. These development checks do not replace release signing.
 Never replace the development profile with a link to a Chrome, Arc, Chromium,
 or daily-use OpenArc profile. Chromium owns its data compatibility, while future
 OpenArc metadata has its own migration requirements.

@@ -21,7 +21,7 @@ The main experience is a left sidebar with permanent saved tabs above a divider 
 
 ### Proposed defaults
 
-These are recommended product defaults: local data with no browser account; optional profile-wide Favorites; light/dark appearance following macOS; automatic tab archiving off; no cloud sync in the first release. Implementation begins on the verified Apple Silicon host, and BSD-3-Clause has been adopted for original OpenArc code. The icon, exact styling, Intel support, minimum macOS version, repository owner, and binary distribution method remain to be selected during implementation.
+These are recommended product defaults: local data with no browser account; optional profile-wide Favorites; light/dark appearance following macOS; automatic tab archiving off; no cloud sync in the first release. Implementation begins on the verified Apple Silicon host, and BSD-3-Clause has been adopted for original OpenArc code. The canonical repository is [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc). The icon, exact styling, Intel support, minimum macOS version, and binary distribution method remain to be selected during implementation.
 
 ## What the Arc research tells us
 
