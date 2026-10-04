@@ -6,7 +6,7 @@ The official Git tag **155.0.8059.26** resolves to **`16c3e55476d3564bea713314b2
 
 ## Patch results
 
-Downloaded only the eleven files affected by the current patch series from the exact candidate revision into an isolated, ignored snapshot repository. All three patches passed sequential `git apply --check --index` and application:
+After extending the no-AI patch on 4 October, downloaded all seventeen files affected by the current patch series afresh from the exact candidate revision into a new isolated, ignored snapshot repository. All three patches passed sequential `git apply --check --index` and application:
 
 | Patch | Result |
 | --- | --- |
@@ -14,9 +14,11 @@ Downloaded only the eleven files affected by the current patch series from the e
 | `0002-openarc-vertical-tabs.patch` | Applied without conflict |
 | `0003-openarc-no-ai-defaults.patch` | Applied without conflict |
 
-The resulting indexed diff passed `git diff --cached --check`. Reversing the patches in reverse order restored every downloaded file's original SHA-256 and left the snapshot's Git status empty. Hashes of `upstream.lock` and the eleven corresponding files in the active checkout remained unchanged.
+The resulting indexed diff passed `git diff --cached --check`. Reversing the patches in reverse order restored every downloaded file's original SHA-256 and left the snapshot's Git status empty. Hashes of `upstream.lock` and the seventeen corresponding files in the active checkout remained unchanged.
 
-Local structured evidence, including source URLs, patch hashes, file hashes, command results, tag resolution, and seam comparisons, is preserved at `.build/upstream-rehearsal-155.0.8059.26-7iwxbrfk/evidence.json`. The ignored directory also contains the isolated source snapshot and inspected files; it is local evidence, not a published build artifact.
+Current ordered apply/reverse evidence is `.build/no-ai-audit-validation/evidence.json`, with exact source URLs, source/patched hashes, commands and separate pinned-154/candidate-155 snapshots. The current no-AI patch SHA-256 is `b90f0d6e8536cd4ba6f3a10df1cec757caf712d043f922d3ae3942ab0d620466`. Checks also covered ten disabled feature definitions, the Autofill AI Settings producer/consumer binding, ordinary Autofill card markers, attribution, and plist/GRIT parsing. These are static source checks, not TypeScript or C++ compilation.
+
+The earlier `.build/upstream-rehearsal-155.0.8059.26-7iwxbrfk/evidence.json` remains the source for tag resolution and the SDK/vertical-tab comparisons below; its eleven-file patch result covers an older patch hash and is superseded by the seventeen-file validation. All directories are ignored local evidence, not published build artifacts.
 
 ## Source-seam comparison
 

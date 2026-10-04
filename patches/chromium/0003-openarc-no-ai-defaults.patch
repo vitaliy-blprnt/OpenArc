@@ -19,8 +19,67 @@ index 8198ba0..02e39df 100644
  
  bool IsHistoryEmbeddingsEnabledForProfile(Profile* profile) {
    if (!IsHistoryEmbeddingsFeatureEnabled()) {
+diff --git a/chrome/browser/resources/settings/autofill_page/autofill_page.html b/chrome/browser/resources/settings/autofill_page/autofill_page.html
+index 63e782f..ece84cc 100644
+--- a/chrome/browser/resources/settings/autofill_page/autofill_page.html
++++ b/chrome/browser/resources/settings/autofill_page/autofill_page.html
+@@ -120,10 +120,12 @@
+   </template>
+ </div>
+ 
+-<settings-section page-title="$i18n{yourSavedInfoAutofillSettingsLabel}">
+-  <collapsible-autofill-settings-card prefs="{{prefs}}">
+-  </collapsible-autofill-settings-card>
+-</settings-section>
++<template is="dom-if" if="[[showAutofillAiSettings_]]">
++  <settings-section page-title="$i18n{yourSavedInfoAutofillSettingsLabel}">
++    <collapsible-autofill-settings-card prefs="{{prefs}}">
++    </collapsible-autofill-settings-card>
++  </settings-section>
++</template>
+ 
+ <settings-section page-title="$i18n{yourSavedInfoRelatedServicesTitle}">
+   <div route-path="default">
+diff --git a/chrome/browser/resources/settings/autofill_page/autofill_page.ts b/chrome/browser/resources/settings/autofill_page/autofill_page.ts
+index 01d5383..d41b7ea 100644
+--- a/chrome/browser/resources/settings/autofill_page/autofill_page.ts
++++ b/chrome/browser/resources/settings/autofill_page/autofill_page.ts
+@@ -116,6 +116,11 @@ export class SettingsAutofillPageElement extends
+         },
+       },
+ 
++      showAutofillAiSettings_: {
++        type: Boolean,
++        value: () => loadTimeData.getBoolean('showAutofillAiSettings'),
++      },
++
+       showSuggestionsFromGeminiSettings_: {
+         type: Boolean,
+         value() {
+@@ -141,6 +146,7 @@ export class SettingsAutofillPageElement extends
+   declare prefs: Record<string, unknown>;
+   declare private hierarchy_: DataTypeHierarchy;
+   declare private isShoppingEnabled_: boolean;
++  declare private showAutofillAiSettings_: boolean;
+   declare private showSuggestionsFromGeminiSettings_: boolean;
+ 
+   private dataChipIdToChip_: Map<YourSavedInfoDataChip, DataChip> = new Map();
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index c87847c..b82bfda 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -591,6 +591,9 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   const auto& autofill_client =
+       *autofill::ContentAutofillClient::FromWebContents(
+           web_ui->GetWebContents());
++  html_source->AddBoolean(
++      "showAutofillAiSettings",
++      base::FeatureList::IsEnabled(autofill::features::kAutofillAiWithDataSchema));
+   html_source->AddBoolean(
+       "showAutofillAiControl",
+       autofill::MayPerformAutofillAiAction(
 diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
-index e9f21e3..dab03af 100644
+index e9f21e3..0e561b8 100644
 --- a/chrome/common/chrome_features.cc
 +++ b/chrome/common/chrome_features.cc
 @@ -584,14 +584,7 @@ BASE_FEATURE(kGlicMessageFirstFre, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -39,6 +98,31 @@ index e9f21e3..dab03af 100644
  
  BASE_FEATURE(kGlicBackgroundActuation, base::FEATURE_DISABLED_BY_DEFAULT);
  
+@@ -1137,7 +1130,7 @@ BASE_FEATURE(kGoogleChromeScheme, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Controls whether the Google Search AI Mode Workspace link (Connected Apps) is
+ // shown in AI Settings. Acts as a killswitch.
+-BASE_FEATURE(kGoogleSearchAiModeWorkspace, base::FEATURE_ENABLED_BY_DEFAULT);
++BASE_FEATURE(kGoogleSearchAiModeWorkspace, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Force Privacy Guide to be available even if it would be unavailable
+ // otherwise. This is meant for development and test purposes only.
+diff --git a/components/autofill/core/common/autofill_features.cc b/components/autofill/core/common/autofill_features.cc
+index 1c35dfb..3bb44d7 100644
+--- a/components/autofill/core/common/autofill_features.cc
++++ b/components/autofill/core/common/autofill_features.cc
+@@ -426,7 +426,11 @@ DEFINE_FEATURE_WITH_MOBILE_COUNTRY_RESTRICTION(
+     kAutofillAiWalletVehicleRegistration);
+ 
+ // Enables the second iteration AutofillAI.
++#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+ DEFINE_FEATURE_WITH_MOBILE_COUNTRY_RESTRICTION(kAutofillAiWithDataSchema);
++#else
++BASE_FEATURE(kAutofillAiWithDataSchema, base::FEATURE_DISABLED_BY_DEFAULT);
++#endif
+ 
+ // When enabled, autofill will fill not skip filling fields that had an initial
+ // value which was modified.
 diff --git a/components/compose/core/browser/compose_features.cc b/components/compose/core/browser/compose_features.cc
 index bc0d7b5..2c8be91 100644
 --- a/components/compose/core/browser/compose_features.cc
@@ -53,10 +137,15 @@ index bc0d7b5..2c8be91 100644
  BASE_FEATURE(kEnableComposeSavedStateNudge,
               "ComposeNudge",
 diff --git a/components/lens/lens_features.cc b/components/lens/lens_features.cc
-index 5775195..e35f7f8 100644
+index 5775195..420e973 100644
 --- a/components/lens/lens_features.cc
 +++ b/components/lens/lens_features.cc
-@@ -20,13 +20,7 @@ BASE_FEATURE(kLensStandalone, base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -16,17 +16,11 @@
+ 
+ namespace lens::features {
+ 
+-BASE_FEATURE(kLensStandalone, base::FEATURE_ENABLED_BY_DEFAULT);
++BASE_FEATURE(kLensStandalone, base::FEATURE_DISABLED_BY_DEFAULT);
  
  BASE_FEATURE(kShowContextualTasksMenuIcon, base::FEATURE_ENABLED_BY_DEFAULT);
  
@@ -75,7 +164,7 @@ diff --git a/components/omnibox/browser/aim_eligibility_service_features.cc b/co
 index c23cef8..254308e 100644
 --- a/components/omnibox/browser/aim_eligibility_service_features.cc
 +++ b/components/omnibox/browser/aim_eligibility_service_features.cc
-@@ -8,6 +8,6 @@
+@@ -8,7 +8,7 @@
  
  namespace omnibox {
  
@@ -83,3 +172,36 @@ index c23cef8..254308e 100644
 +BASE_FEATURE(kAimEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
  
  BASE_FEATURE(kAimServerEligibilityEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+diff --git a/components/skills/features.cc b/components/skills/features.cc
+index f68667c..1f2dbfc 100644
+--- a/components/skills/features.cc
++++ b/components/skills/features.cc
+@@ -7,13 +7,7 @@
+ 
+ namespace features {
+ 
+-BASE_FEATURE(kSkillsEnabled,
+-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+-             base::FEATURE_ENABLED_BY_DEFAULT
+-#else
+-             base::FEATURE_DISABLED_BY_DEFAULT
+-#endif
+-);
++BASE_FEATURE(kSkillsEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kSkillsMetricsProviderEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kSkillsRefinementEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kSkillsAutocomplete, base::FEATURE_DISABLED_BY_DEFAULT);
+diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
+index 6576dae..609c075 100644
+--- a/media/base/media_switches.cc
++++ b/media/base/media_switches.cc
+@@ -490,7 +490,7 @@ BASE_FEATURE(kContextMenuCopyVideoFrame, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kContextMenuSaveVideoFrameAs, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Enables the "Search Video Frame with <Search Provider>" context menu item.
+-BASE_FEATURE(kContextMenuSearchForVideoFrame, base::FEATURE_ENABLED_BY_DEFAULT);
++BASE_FEATURE(kContextMenuSearchForVideoFrame, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Forces D3DVideoDecoder to use one decoder texture per picture buffer.
+ // Owner: media-gpu-team@chromium.org

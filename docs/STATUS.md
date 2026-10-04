@@ -33,12 +33,12 @@ does not promise this revision remains current after this checkpoint.
 | Official release tag and exact commit resolution | Verified |
 | Host/toolchain preflight | Passed for attempting a development build |
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
-| Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
+| Identity, vertical-tab, and AI-default patches against exact upstream source files | Current three-patch series passed apply/reverse, XML and source checks across 17 files at pinned 154 and candidate 155; compilation pending |
 | Tooling test suite | 73 tests passed locally, including build provenance, baseline output reuse, interruption-safe patch reversal, dependency inventory/bootstrap, isolated native-host safeguards, and read-only upstream checks |
 | Extension fixture scope guards | 31 Node tests passed; includes timer receiver binding, pin/group checks, interrupted group cleanup, and bounded move/activation event handling |
 | Native model preparation | 24 C++ tests passed for association reconciliation and the bounded tab-session codec after standalone compilation with the pinned Chromium Clang, headers, libbase, and libc++; the documented recipe was executed. GN/browser integration has not been run |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `235690c`, including 73 Python and 21 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37178485176)); native helper compilation is separate local evidence |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `7ac9ed8`, including 73 Python and 31 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37180249971)); native helper compilation is separate local evidence |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Upstream patch rehearsal | All three patches apply and reverse cleanly against candidate 155.0.8059.26; SDK and vertical-tab seams inspected. [Evidence and limits](research/upstream-rehearsal.md); full upgrade/rebuild/runtime checks pending |
@@ -56,6 +56,11 @@ before rebuilding. Its actual use awaits the baseline build and runtime checks.
 The read-only upstream check observed early stable `155.0.8059.26` at a `0.005`
 rollout fraction on 4 October 2026 UTC, above the still-active pinned version.
 This is an upgrade candidate, not a new source pin or a qualified update.
+
+The AI-default patch now covers ten feature definitions and the Autofill AI
+opt-in UI. The automated password-change service remains a known gap requiring
+a focused product gate and tests; visible UI and model-download behavior remain
+unqualified. See [the source audit](CHROMIUM-INTEGRATION.md#built-in-ai-defaults).
 
 The existing extension inventory is local-only under ignored build artifacts.
 It is not part of public source or public evidence.
