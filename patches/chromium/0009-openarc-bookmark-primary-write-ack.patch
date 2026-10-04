@@ -1,0 +1,415 @@
+diff --git a/components/bookmarks/browser/bookmark_model.cc b/components/bookmarks/browser/bookmark_model.cc
+--- a/components/bookmarks/browser/bookmark_model.cc
++++ b/components/bookmarks/browser/bookmark_model.cc
+@@ -11,6 +11,7 @@
+ #include <string>
+ #include <utility>
+ 
++#include "base/barrier_callback.h"
+ #include "base/check.h"
+ #include "base/check_op.h"
+ #include "base/debug/crash_logging.h"
+@@ -23,6 +24,7 @@
+ #include "base/notreached.h"
+ #include "base/observer_list.h"
+ #include "base/strings/string_util.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/task/thread_pool.h"
+ #include "base/uuid.h"
+ #include "components/bookmarks/browser/bookmark_load_details.h"
+@@ -1207,6 +1209,34 @@
+                                                matching_algorithm);
+ }
+ 
++void BookmarkModel::CommitPendingWrites(
++    base::OnceCallback<void(bool)> callback) {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  CHECK(callback);
++  if (!loaded_ || !local_or_syncable_store_ ||
++      (AreFoldersForAccountStorageAllowed() && !account_store_)) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(std::move(callback), false));
++    return;
++  }
++
++  // Neither completion captures this model. Each store captures its snapshot
++  // synchronously and posts the primary result back to this sequence.
++  auto barrier = base::BarrierCallback<bool>(
++      account_store_ ? 2u : 1u,
++      base::BindOnce(
++          [](base::OnceCallback<void(bool)> callback,
++             const std::vector<bool>& results) {
++            std::move(callback).Run(std::ranges::all_of(
++                results, [](bool success) { return success; }));
++          },
++          std::move(callback)));
++  local_or_syncable_store_->CommitPendingWrites(barrier);
++  if (account_store_) {
++    account_store_->CommitPendingWrites(barrier);
++  }
++}
++
+ void BookmarkModel::DisableWritesToDiskForTest() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   local_or_syncable_store_.reset();
+diff --git a/components/bookmarks/browser/bookmark_model.h b/components/bookmarks/browser/bookmark_model.h
+--- a/components/bookmarks/browser/bookmark_model.h
++++ b/components/bookmarks/browser/bookmark_model.h
+@@ -17,6 +17,7 @@
+ #include "base/check_op.h"
+ #include "base/compiler_specific.h"
+ #include "base/containers/flat_map.h"
++#include "base/functional/callback_forward.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+@@ -89,6 +90,17 @@
+   // BookmarkModelLoaded().
+   void Load(const base::FilePath& profile_path);
+ 
++  // Immediately snapshots the current model and schedules its primary storage
++  // files for atomic write. `callback` is posted to the calling sequence with
++  // true only if every required primary write succeeds. An unloaded model or
++  // missing required storage reports false asynchronously without writing.
++  //
++  // Completion describes this captured snapshot, not subsequent edits, secondary
++  // encryption mirrors, or a guarantee against power loss. It may arrive after
++  // model destruction; callers with shorter lifetimes should bind a WeakPtr.
++  // Delivery requires the calling sequence to continue accepting tasks.
++  void CommitPendingWrites(base::OnceCallback<void(bool)> callback);
++
+   // Returns true if the model finished loading.
+   bool loaded() const {
+     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+diff --git a/components/bookmarks/browser/bookmark_model_unittest.cc b/components/bookmarks/browser/bookmark_model_unittest.cc
+--- a/components/bookmarks/browser/bookmark_model_unittest.cc
++++ b/components/bookmarks/browser/bookmark_model_unittest.cc
+@@ -3067,6 +3067,79 @@
+     BookmarkModelLoadTest,
+     ::testing::ValuesIn(test::kAllBookmarkEncryptionStages));
+ 
++TEST(BookmarkModelCommitTest, UnloadedModelFailsAsynchronously) {
++  base::test::TaskEnvironment task_environment;
++  BookmarkModel model(std::make_unique<TestBookmarkClient>());
++  base::test::TestFuture<bool> result;
++  model.CommitPendingWrites(result.GetCallback());
++  EXPECT_FALSE(result.IsReady());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_FALSE(result.Get());
++}
++
++TEST(BookmarkModelCommitTest, InMemoryModelWithoutStorageFailsAsynchronously) {
++  base::test::TaskEnvironment task_environment;
++  auto model = TestBookmarkClient::CreateModel();
++  ASSERT_TRUE(model->loaded());
++  base::test::TestFuture<bool> result;
++  model->CommitPendingWrites(result.GetCallback());
++  EXPECT_FALSE(result.IsReady());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_FALSE(result.Get());
++}
++
++TEST(BookmarkModelCommitTest, CommitsBothPrimaryStoresWithoutScheduledChanges) {
++  base::test::ScopedFeatureList features;
++  features.InitWithFeatures({switches::kSyncEnableBookmarksInTransportMode},
++                            {kEncryptBookmarks});
++  base::test::TaskEnvironment task_environment;
++  base::ScopedTempDir directory;
++  ASSERT_TRUE(directory.CreateUniqueTempDir());
++  BookmarkModel model(std::make_unique<TestBookmarkClient>());
++  model.Load(directory.GetPath());
++  test::WaitForBookmarkModelToLoad(&model);
++  task_environment.RunUntilIdle();
++  ASSERT_FALSE(model.LocalOrSyncableStorageHasPendingWriteForTest());
++  ASSERT_FALSE(model.AccountStorageHasPendingWriteForTest());
++  base::test::TestFuture<bool> result;
++  model.CommitPendingWrites(result.GetCallback());
++  EXPECT_FALSE(result.IsReady());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_TRUE(result.Get());
++  EXPECT_TRUE(base::PathExists(
++      directory.GetPath().Append(kLocalOrSyncableBookmarksFileName)));
++  EXPECT_TRUE(base::PathExists(
++      directory.GetPath().Append(kAccountBookmarksFileName)));
++}
++
++TEST(BookmarkModelCommitTest, AccountPrimaryFailureFailsCombinedResult) {
++  base::test::ScopedFeatureList features;
++  features.InitWithFeatures({switches::kSyncEnableBookmarksInTransportMode},
++                            {kEncryptBookmarks});
++  base::test::TaskEnvironment task_environment;
++  base::ScopedTempDir directory;
++  ASSERT_TRUE(directory.CreateUniqueTempDir());
++  BookmarkModel model(std::make_unique<TestBookmarkClient>());
++  model.Load(directory.GetPath());
++  test::WaitForBookmarkModelToLoad(&model);
++  task_environment.RunUntilIdle();
++  // Replace the account target with a directory after load, so its atomic
++  // replacement fails while the local primary write can still succeed.
++  const auto account_path = directory.GetPath().Append(kAccountBookmarksFileName);
++  ASSERT_TRUE(base::DeleteFile(account_path));
++  ASSERT_TRUE(base::CreateDirectory(account_path));
++  base::test::TestFuture<bool> result;
++  model.CommitPendingWrites(result.GetCallback());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_FALSE(result.Get());
++  EXPECT_TRUE(base::PathExists(
++      directory.GetPath().Append(kLocalOrSyncableBookmarksFileName)));
++}
++
+ TEST(BookmarkModelUnencryptedStorageTest, SaveExactlyOneUnencryptedFile) {
+   base::test::ScopedFeatureList features;
+   features.InitWithFeatures({switches::kSyncEnableBookmarksInTransportMode},
+diff --git a/components/bookmarks/browser/bookmark_storage.cc b/components/bookmarks/browser/bookmark_storage.cc
+--- a/components/bookmarks/browser/bookmark_storage.cc
++++ b/components/bookmarks/browser/bookmark_storage.cc
+@@ -7,6 +7,7 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <memory>
+ #include <unordered_map>
+ #include <utility>
+ 
+@@ -19,6 +20,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/notreached.h"
+ #include "base/numerics/safe_conversions.h"
++#include "base/task/bind_post_task.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
+@@ -34,6 +36,28 @@
+ namespace bookmarks {
+ 
+ namespace {
++
++// ImportantFileWriter drops its after-write callback if background serialization
++// fails. This owned guard reports that failure too, without retaining storage or
++// model pointers. BindPostTask keeps all completion invocations on the origin.
++class PrimaryWriteCompletion {
++ public:
++  explicit PrimaryWriteCompletion(base::OnceCallback<void(bool)> callback)
++      : callback_(base::BindPostTask(
++            base::SequencedTaskRunner::GetCurrentDefault(),
++            std::move(callback))) {}
++
++  ~PrimaryWriteCompletion() {
++    if (callback_) {
++      std::move(callback_).Run(false);
++    }
++  }
++
++  void Complete(bool success) { std::move(callback_).Run(success); }
++
++ private:
++  base::OnceCallback<void(bool)> callback_;
++};
+ 
+ // Extension used for backup files (copy of main file created during startup).
+ const base::FilePath::CharType kBackupExtension[] = FILE_PATH_LITERAL("bak");
+@@ -223,6 +247,22 @@
+   metrics::RecordTimeSinceLastScheduledSave(schedule_delta);
+   last_scheduled_save_ = base::TimeTicks::Now();
+   was_scheduled_save_ever_called_ = true;
++}
++
++void BookmarkStorage::CommitPendingWrites(
++    base::OnceCallback<void(bool)> callback) {
++  CHECK(callback);
++  // Preserve the normal backup, encryption and mirror paths. Force a fresh
++  // snapshot, including when an earlier write has already left the timer.
++  ScheduleSave();
++  writer_.RegisterOnNextWriteCallbacks(
++      base::OnceClosure(),
++      base::BindOnce(&PrimaryWriteCompletion::Complete,
++                     std::make_unique<PrimaryWriteCompletion>(
++                         std::move(callback))));
++  // This moves the registered callback into this write before returning, so a
++  // subsequent request cannot replace an earlier request's callback.
++  writer_.DoScheduledWrite();
+ }
+ 
+ base::ImportantFileWriter::BackgroundDataProducerCallback
+diff --git a/components/bookmarks/browser/bookmark_storage.h b/components/bookmarks/browser/bookmark_storage.h
+--- a/components/bookmarks/browser/bookmark_storage.h
++++ b/components/bookmarks/browser/bookmark_storage.h
+@@ -93,6 +93,14 @@
+   // Schedules saving the bookmark bar model to disk.
+   void ScheduleSave();
+ 
++  // Captures a fresh model snapshot and schedules its primary file for atomic
++  // write, even if no save is pending. The result is posted to the calling
++  // sequence and reports false if serialization or the primary write fails.
++  // Each request owns a separate completion. The callback does not depend on
++  // this object's lifetime; delivery requires the caller's sequence to remain
++  // available. Secondary mirrors and later edits are outside this result.
++  void CommitPendingWrites(base::OnceCallback<void(bool)> callback);
++
+   // ImportantFileWriter::BackgroundDataSerializer implementation.
+   base::ImportantFileWriter::BackgroundDataProducerCallback
+   GetSerializedDataProducerForBackgroundSequence() override;
+diff --git a/components/bookmarks/browser/bookmark_storage_unittest.cc b/components/bookmarks/browser/bookmark_storage_unittest.cc
+--- a/components/bookmarks/browser/bookmark_storage_unittest.cc
++++ b/components/bookmarks/browser/bookmark_storage_unittest.cc
+@@ -9,14 +9,17 @@
+ 
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
++#include "base/functional/bind.h"
+ #include "base/json/json_reader.h"
+ #include "base/json/json_writer.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/strings/strcat.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/test/metrics/histogram_tester.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/task_environment.h"
+ #include "base/test/test_file_util.h"
++#include "base/test/test_future.h"
+ #include "base/time/time.h"
+ #include "components/bookmarks/browser/bookmark_codec.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+@@ -49,6 +52,18 @@
+   return model;
+ }
+ 
++class SerializationFailureStorage : public BookmarkStorage {
++ public:
++  using BookmarkStorage::BookmarkStorage;
++
++  base::ImportantFileWriter::BackgroundDataProducerCallback
++  GetSerializedDataProducerForBackgroundSequence() override {
++    return base::BindOnce([]() -> std::optional<std::string> {
++      return std::nullopt;
++    });
++  }
++};
++
+ std::optional<base::DictValue> ReadFileToDict(const base::FilePath& file_path) {
+   std::string file_content;
+   if (!base::ReadFileToString(file_path, &file_content)) {
+@@ -326,6 +341,119 @@
+   std::optional<base::DictValue> file_content = GetPrimaryFileContent();
+   ASSERT_TRUE(file_content.has_value());
+   EXPECT_FALSE(file_content->empty());
++}
++
++TEST_P(BookmarkStorageWithSingleFileTest,
++       CommitCapturesFreshSnapshotAfterEarlierWriteWasQueued) {
++  base::test::TaskEnvironment task_environment{
++      base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED};
++  auto model = CreateModelWithOneBookmark();
++  BookmarkStorage storage(
++      model.get(), BookmarkStorage::kSelectLocalOrSyncableNodes, encryptor_,
++      clear_text_file_path_, encrypted_file_path_);
++  storage.ScheduleSave();
++  storage.SaveNowIfScheduledForTesting();
++  ASSERT_FALSE(storage.HasScheduledSaveForTesting());
++
++  model->AddURL(model->bookmark_bar_node(), 1, u"Captured",
++                GURL("https://example.com/captured"));
++  base::test::TestFuture<bool> result;
++  storage.CommitPendingWrites(result.GetCallback());
++  EXPECT_FALSE(result.IsReady());
++  EXPECT_FALSE(storage.HasScheduledSaveForTesting());
++  // This standalone storage is not registered with the in-memory test model.
++  // This later edit must not be included in the already captured snapshot.
++  model->AddURL(model->bookmark_bar_node(), 2, u"Later",
++                GURL("https://example.com/later"));
++  task_environment.RunUntilIdle();
++
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_TRUE(result.Get());
++  const auto content = GetPrimaryFileContent();
++  ASSERT_TRUE(content);
++  const auto* children =
++      content->FindListByDottedPath("roots.bookmark_bar.children");
++  ASSERT_TRUE(children);
++  ASSERT_EQ(children->size(), 2u);
++  const auto* url = (*children)[1].GetDict().FindString("url");
++  ASSERT_TRUE(url);
++  EXPECT_EQ(*url, "https://example.com/captured");
++}
++
++TEST_P(BookmarkStorageWithSingleFileTest,
++       ConcurrentCommitsKeepSeparateCallbacksOnOriginSequence) {
++  base::test::TaskEnvironment task_environment{
++      base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED};
++  auto model = CreateModelWithOneBookmark();
++  BookmarkStorage storage(
++      model.get(), BookmarkStorage::kSelectLocalOrSyncableNodes, encryptor_,
++      clear_text_file_path_, encrypted_file_path_);
++  base::test::TestFuture<bool> first;
++  base::test::TestFuture<bool> second;
++  auto origin = base::SequencedTaskRunner::GetCurrentDefault();
++  storage.CommitPendingWrites(base::BindOnce(
++      [](scoped_refptr<base::SequencedTaskRunner> origin,
++         base::OnceCallback<void(bool)> callback, bool success) {
++        EXPECT_TRUE(origin->RunsTasksInCurrentSequence());
++        std::move(callback).Run(success);
++      },
++      origin, first.GetCallback()));
++  storage.CommitPendingWrites(second.GetCallback());
++  EXPECT_FALSE(first.IsReady());
++  EXPECT_FALSE(second.IsReady());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(first.IsReady());
++  ASSERT_TRUE(second.IsReady());
++  EXPECT_TRUE(first.Get());
++  EXPECT_TRUE(second.Get());
++}
++
++TEST_P(BookmarkStorageWithSingleFileTest, CommitReportsPrimaryWriteFailure) {
++  base::test::TaskEnvironment task_environment;
++  auto model = CreateModelWithOneBookmark();
++  ASSERT_TRUE(base::CreateDirectory(GetPrimaryFilepath()));
++  BookmarkStorage storage(
++      model.get(), BookmarkStorage::kSelectLocalOrSyncableNodes, encryptor_,
++      clear_text_file_path_, encrypted_file_path_);
++  base::test::TestFuture<bool> result;
++  storage.CommitPendingWrites(result.GetCallback());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_FALSE(result.Get());
++}
++
++TEST_P(BookmarkStorageWithSingleFileTest, CommitReportsDroppedProducerResult) {
++  base::test::TaskEnvironment task_environment;
++  auto model = CreateModelWithOneBookmark();
++  SerializationFailureStorage storage(
++      model.get(), BookmarkStorage::kSelectLocalOrSyncableNodes, encryptor_,
++      clear_text_file_path_, encrypted_file_path_);
++  base::test::TestFuture<bool> result;
++  storage.CommitPendingWrites(result.GetCallback());
++  EXPECT_FALSE(result.IsReady());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_FALSE(result.Get());
++  EXPECT_FALSE(base::PathExists(GetPrimaryFilepath()));
++}
++
++TEST_P(BookmarkStorageWithSingleFileTest,
++       CommitCompletionOutlivesStorageAndModel) {
++  base::test::TaskEnvironment task_environment{
++      base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED};
++  auto model = CreateModelWithOneBookmark();
++  auto storage = std::make_unique<BookmarkStorage>(
++      model.get(), BookmarkStorage::kSelectLocalOrSyncableNodes, encryptor_,
++      clear_text_file_path_, encrypted_file_path_);
++  base::test::TestFuture<bool> result;
++  storage->CommitPendingWrites(result.GetCallback());
++  storage.reset();
++  model.reset();
++  EXPECT_FALSE(result.IsReady());
++  task_environment.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_TRUE(result.Get());
++  EXPECT_TRUE(GetPrimaryFileContent());
+ }
+ 
+ INSTANTIATE_TEST_SUITE_P(

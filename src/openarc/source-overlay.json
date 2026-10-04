@@ -5,6 +5,8 @@
     "workspace/association_reconciler.cc",
     "workspace/association_reconciler.h",
     "workspace/association_reconciler_unittest.cc",
+    "workspace/features.cc",
+    "workspace/features.h",
     "workspace/saved_entry_catalog.cc",
     "workspace/saved_entry_catalog.h",
     "workspace/saved_entry_catalog_test_main.cc",
@@ -16,8 +18,16 @@
     "workspace/window_session_codec.h",
     "workspace/window_session_codec_unittest.cc",
     "workspace/workspace_ids.h",
+    "workspace/workspace_record_store.cc",
+    "workspace/workspace_record_store.h",
+    "workspace/workspace_service.cc",
+    "workspace/workspace_service.h",
+    "workspace/workspace_service_unittest.cc",
     "workspace/workspace_tab_state.cc",
     "workspace/workspace_tab_state.h",
-    "workspace/workspace_tab_state_unittest.cc"
+    "workspace/workspace_tab_state_unittest.cc",
+    "workspace/workspace_window_controller.cc",
+    "workspace/workspace_window_controller.h",
+    "workspace/workspace_window_controller_unittest.cc"
   ]
 }

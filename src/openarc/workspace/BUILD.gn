@@ -1,8 +1,17 @@
 # Copyright 2026 OpenArc contributors. SPDX-License-Identifier: BSD-3-Clause
 
-# Prepared targets only. No Chromium overlay, patch, or browser dependency loads
-# this file yet. A future overlay must place openarc/ at the Chromium source
-# root.
+# Installed at the Chromium source root by the owned source overlay. Production
+# hooks and the focused native executables share these original modules.
+import("//testing/test.gni")
+
+source_set("features") {
+  sources = [
+    "features.cc",
+    "features.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 source_set("association_reconciler") {
   sources = [
     "association_reconciler.cc",
@@ -77,11 +86,78 @@ source_set("workspace_tab_state_unittests") {
   deps = [
     ":workspace_tab_state",
     "//base/test:test_support",
+    "//components/tabs:impl",
     "//components/tabs:test_support",
     "//content/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
     "//url",
+  ]
+}
+
+source_set("workspace_window_controller") {
+  sources = [
+    "workspace_window_controller.cc",
+    "workspace_window_controller.h",
+  ]
+  public_deps = [
+    ":saved_entry_catalog",
+    ":tab_session_codec",
+    "//base",
+    "//chrome/browser/ui/tabs:tab_strip",
+  ]
+  deps = [
+    ":workspace_tab_state",
+    "//chrome/browser/profiles:profile",
+  ]
+}
+
+source_set("workspace_window_controller_unittests") {
+  testonly = true
+  sources = [ "workspace_window_controller_unittest.cc" ]
+  deps = [
+    ":workspace_tab_state",
+    ":workspace_window_controller",
+    "//base/test:test_support",
+    "//chrome/browser/ui/tabs:test_support",
+    "//chrome/test:test_support",
+    "//components/bookmarks/test",
+    "//content/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("workspace_record_store") {
+  sources = [
+    "workspace_record_store.cc",
+    "workspace_record_store.h",
+  ]
+  public_deps = [
+    ":saved_entry_catalog",
+    ":tab_session_codec",
+    "//base",
+  ]
+}
+
+source_set("workspace_service") {
+  sources = [
+    "workspace_service.cc",
+    "workspace_service.h",
+  ]
+  public_deps = [
+    ":workspace_record_store",
+    "//components/keyed_service/core",
+  ]
+  deps = [ "//components/bookmarks/browser" ]
+}
+
+source_set("workspace_service_unittests") {
+  testonly = true
+  sources = [ "workspace_service_unittest.cc" ]
+  deps = [
+    ":workspace_service",
+    "//components/bookmarks/test",
+    "//testing/gtest",
   ]
 }
 
@@ -98,4 +174,35 @@ source_set("association_reconciler_unittests") {
     ":window_session_codec",
     "//testing/gtest",
   ]
+}
+
+test("workspace_model_tests") {
+  deps = [
+    ":association_reconciler_unittests",
+    ":saved_entry_catalog_unittests",
+    ":workspace_service_unittests",
+    "//components/test:run_all_unittests",
+  ]
+}
+
+test("workspace_bookmark_write_tests") {
+  deps = [
+    "//components/bookmarks/browser:unit_tests",
+    "//components/test:run_all_unittests",
+  ]
+}
+
+test("workspace_tab_state_tests") {
+  deps = [
+    ":workspace_tab_state_unittests",
+    "//components/test:run_all_unittests",
+  ]
+}
+
+test("workspace_window_controller_tests") {
+  deps = [
+    ":workspace_window_controller_unittests",
+    "//chrome/test:test_support_unit",
+  ]
+  data_deps = [ "//chrome:packed_resources" ]
 }

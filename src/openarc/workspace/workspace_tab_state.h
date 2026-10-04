@@ -6,6 +6,8 @@
 #include <optional>
 
 #include "base/callback_list.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
 #include "openarc/workspace/tab_session_codec.h"
@@ -41,9 +43,11 @@ class WorkspaceTabState : public tabs::ContentsObservingTabFeature {
   bool SetAssociation(std::optional<TabWorkspaceBinding> association);
 
   std::optional<TabWorkspaceBinding> association_;
-  base::RepeatingClosureList changes_;
+  scoped_refptr<base::RefCountedData<base::RepeatingClosureList>> changes_ =
+      base::MakeRefCounted<base::RefCountedData<base::RepeatingClosureList>>();
   ui::ScopedUnownedUserData<WorkspaceTabState> scoped_data_;
   SEQUENCE_CHECKER(sequence_checker_);
+  base::WeakPtrFactory<WorkspaceTabState> weak_factory_{this};
 };
 
 }  // namespace openarc::workspace

@@ -22,7 +22,8 @@ int main(int argc, char** argv) {
                       base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!icu_data.IsValid() ||
       !base::i18n::InitializeICUWithFileDescriptor(
-          icu_data.GetPlatformFile(), base::MemoryMappedFile::Region::kWholeFile)) {
+          icu_data.GetPlatformFile(),
+          base::MemoryMappedFile::Region::kWholeFile)) {
     return 3;
   }
   ui::ResourceBundle::InitSharedInstanceWithPakPath(base::FilePath(argv[2]));

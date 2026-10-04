@@ -5,3 +5,5 @@
 0005-openarc-disable-bundled-fieldtrial-tests.patch
 0006-openarc-visible-product-strings.patch
 0007-openarc-preserve-search-engine-migration.patch
+0008-openarc-workspace-tab-state.patch
+0009-openarc-bookmark-primary-write-ack.patch

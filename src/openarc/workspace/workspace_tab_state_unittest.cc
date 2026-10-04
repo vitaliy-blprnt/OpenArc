@@ -123,4 +123,16 @@ TEST_F(WorkspaceTabStateTest, LookupAndDiscardSubscriptionFollowFeatureLifetime)
   EXPECT_TRUE(discards_.empty());
 }
 
+TEST_F(WorkspaceTabStateTest, ObserverCanDestroyFeatureDuringNotification) {
+  bool later_called = false;
+  auto destroy = state_->ObserveChanges(
+      base::BindLambdaForTesting([&] { state_.reset(); }));
+  auto later = state_->ObserveChanges(
+      base::BindLambdaForTesting([&] { later_called = true; }));
+  EXPECT_TRUE(WorkspaceTabStateTestPeer::Set(*state_, SavedBinding()));
+  EXPECT_EQ(state_, nullptr);
+  EXPECT_EQ(WorkspaceTabState::From(tab_), nullptr);
+  EXPECT_FALSE(later_called);
+}
+
 }  // namespace openarc::workspace

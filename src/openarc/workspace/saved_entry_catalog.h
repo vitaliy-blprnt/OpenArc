@@ -13,6 +13,8 @@
 #include "base/callback_list.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/types/expected.h"
@@ -29,7 +31,8 @@ namespace openarc::workspace {
 // Version 1 metadata values are canonical lowercase UUID strings. The future
 // WorkspaceService writes/repairs these keys; the catalog never writes them.
 inline constexpr char kSpaceRootMetadataKey[] = "openarc.workspace.space_id.v1";
-inline constexpr char kSavedEntryMetadataKey[] = "openarc.workspace.entry_id.v1";
+inline constexpr char kSavedEntryMetadataKey[] =
+    "openarc.workspace.entry_id.v1";
 
 enum class BookmarkStorage { kLocalOrSyncable, kAccount };
 
@@ -93,17 +96,21 @@ struct SavedCatalogSnapshot {
   std::vector<SavedCatalogSpace> spaces;
 };
 
-enum class CatalogConfigError { kInvalidId, kInvalidStorage, kDuplicateBinding };
+enum class CatalogConfigError {
+  kInvalidId,
+  kInvalidStorage,
+  kDuplicateBinding,
+};
 
 // Read-only, sequence-bound BookmarkModel observer. Construction may precede
 // model loading. GetSnapshot() is available then, but rows are publishable only
 // when readiness is kReady; individual roots may still be unavailable. Extensive
-// change batches expose kUpdating with no rows, then one rebuilt ready snapshot.
+// changes expose kUpdating with no rows, then one rebuilt ready snapshot.
 // No BookmarkNode pointer is retained across model callbacks.
 //
 // The caller must provide the correct regular-profile BookmarkModel. This class
-// does not obtain a profile, redirect an OTR model, or implement private storage.
-// Browser/profile factory, metadata adoption/repair, persistence and tab binding
+// does not obtain a profile, redirect OTR models, or implement private storage.
+// Browser/profile factory, metadata adoption/repair, persistence, and tab binding
 // are deliberately outside this catalog. Consumers revalidate generation and
 // resolve locators again before acting on a snapshot.
 class SavedEntryCatalog final : private bookmarks::BookmarkModelObserver {
@@ -115,41 +122,48 @@ class SavedEntryCatalog final : private bookmarks::BookmarkModelObserver {
 
   // Validates IDs/storage and unique Space/root bindings before replacing any
   // configuration. Missing/malformed/nested roots are snapshot statuses rather
-  // than configuration failures; bookmarks may change independently at any time.
+  // than configuration failures; bookmarks may change independently.
   base::expected<void, CatalogConfigError> SetSpaceRoots(
       base::span<const SpaceRootBinding> roots);
   // Reference remains valid until the next catalog change; copy to retain it.
   const SavedCatalogSnapshot& GetSnapshot() const;
   // No initial callback. Callbacks should read the current snapshot. Invoking
   // BookmarkModel mutations synchronously from a callback is unsupported.
-  base::CallbackListSubscription ObserveChanges(base::RepeatingClosure callback);
+  base::CallbackListSubscription ObserveChanges(
+      base::RepeatingClosure callback) const;
 
  private:
   void Rebuild();
   void BookmarkModelLoaded(bool ids_reassigned) override;
   void BookmarkModelBeingDeleted() override;
-  void BookmarkNodeMoved(const bookmarks::BookmarkNode*, size_t,
-                         const bookmarks::BookmarkNode*, size_t) override;
+  void BookmarkNodeMoved(const bookmarks::BookmarkNode*,
+                         size_t,
+                         const bookmarks::BookmarkNode*,
+                         size_t) override;
   void BookmarkNodeAdded(const bookmarks::BookmarkNode*, size_t, bool) override;
-  void BookmarkNodeRemoved(const bookmarks::BookmarkNode*, size_t,
-                           const bookmarks::BookmarkNode*, const std::set<GURL>&,
+  void BookmarkNodeRemoved(const bookmarks::BookmarkNode*,
+                           size_t,
+                           const bookmarks::BookmarkNode*,
+                           const std::set<GURL>&,
                            const base::Location&) override;
   void BookmarkNodeChanged(const bookmarks::BookmarkNode*) override;
   void BookmarkMetaInfoChanged(const bookmarks::BookmarkNode*) override;
   void BookmarkNodeFaviconChanged(const bookmarks::BookmarkNode*) override;
   void BookmarkNodeChildrenReordered(const bookmarks::BookmarkNode*) override;
   void BookmarkAllUserNodesRemoved(const std::set<GURL>&,
-                                   const base::Location&) override;
+                                  const base::Location&) override;
   void ExtensiveBookmarkChangesBeginning() override;
   void ExtensiveBookmarkChangesEnded() override;
 
   raw_ptr<bookmarks::BookmarkModel> model_;
   std::vector<SpaceRootBinding> roots_;
   SavedCatalogSnapshot snapshot_;
-  base::RepeatingClosureList changed_;
+  const scoped_refptr<base::RefCountedData<base::RepeatingClosureList>> changed_ =
+      base::MakeRefCounted<base::RefCountedData<base::RepeatingClosureList>>();
   base::ScopedObservation<bookmarks::BookmarkModel,
                           bookmarks::BookmarkModelObserver> observation_{this};
   SEQUENCE_CHECKER(sequence_checker_);
+  mutable base::WeakPtrFactory<SavedEntryCatalog> weak_factory_{this};
 };
 
 }  // namespace openarc::workspace

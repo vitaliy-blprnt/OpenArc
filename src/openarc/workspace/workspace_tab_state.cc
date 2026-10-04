@@ -4,6 +4,8 @@
 
 #include <utility>
 
+#include "base/functional/bind.h"
+
 namespace openarc::workspace {
 
 DEFINE_USER_DATA(WorkspaceTabState);
@@ -28,7 +30,14 @@ std::optional<TabWorkspaceBinding> WorkspaceTabState::GetAssociation() const {
 base::CallbackListSubscription WorkspaceTabState::ObserveChanges(
     base::RepeatingClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return changes_.Add(std::move(callback));
+  return changes_->data.Add(base::BindRepeating(
+      [](base::WeakPtr<WorkspaceTabState> self,
+         const base::RepeatingClosure& callback) {
+        if (self) {
+          callback.Run();
+        }
+      },
+      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 bool WorkspaceTabState::SetAssociation(
@@ -41,7 +50,11 @@ bool WorkspaceTabState::SetAssociation(
   }
   if (association_ != association) {
     association_ = std::move(association);
-    changes_.Notify();
+    // A synchronous observer can close the tab and destroy this feature.
+    // CallbackList itself forbids destruction during Notify; keep its storage
+    // alive and let weak callbacks skip observers after feature destruction.
+    auto changes = changes_;
+    changes->data.Notify();
   }
   return true;
 }

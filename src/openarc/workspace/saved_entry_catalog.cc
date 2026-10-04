@@ -6,6 +6,8 @@
 #include <set>
 #include <utility>
 
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "components/bookmarks/browser/bookmark_client.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
@@ -26,7 +28,7 @@ BookmarkModel::NodeTypeForUuidLookup LookupType(BookmarkStorage storage) {
 std::vector<SavedCatalogRow> ReadRows(const BookmarkNode& root,
                                     BookmarkStorage storage) {
   struct Pending {
-    const BookmarkNode* parent;
+    raw_ptr<const BookmarkNode> parent;
     size_t index;
     size_t depth;
   };
@@ -110,9 +112,16 @@ const SavedCatalogSnapshot& SavedEntryCatalog::GetSnapshot() const {
 }
 
 base::CallbackListSubscription SavedEntryCatalog::ObserveChanges(
-    base::RepeatingClosure callback) {
+    base::RepeatingClosure callback) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return changed_.Add(std::move(callback));
+  return changed_->data.Add(base::BindRepeating(
+      [](base::WeakPtr<SavedEntryCatalog> self,
+         const base::RepeatingClosure& callback) {
+        if (self) {
+          callback.Run();
+        }
+      },
+      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void SavedEntryCatalog::Rebuild() {
@@ -154,7 +163,7 @@ void SavedEntryCatalog::Rebuild() {
     }
     // Overlapping configured subtrees have no unambiguous Space ownership.
     // Include resolved invalid roots in this check to avoid silently adopting
-    // the descendants of a temporarily malformed nested root into another Space.
+    // descendants of a temporarily malformed nested root into another Space.
     for (size_t i = 0; i < resolved.size(); ++i) {
       for (size_t j = i + 1; j < resolved.size(); ++j) {
         if (resolved[i] && resolved[j] &&
@@ -187,12 +196,16 @@ void SavedEntryCatalog::Rebuild() {
       }
     }
   }
-  if (next.readiness == snapshot_.readiness && next.spaces == snapshot_.spaces) {
+  if (next.readiness == snapshot_.readiness &&
+      next.spaces == snapshot_.spaces) {
     return;
   }
   next.generation = snapshot_.generation + 1;
   snapshot_ = std::move(next);
-  changed_.Notify();
+  // An observer may destroy the catalog. Keep CallbackList alive throughout
+  // iteration, and skip later callbacks through their owner weak pointers.
+  auto changed = changed_;
+  changed->data.Notify();
 }
 
 void SavedEntryCatalog::BookmarkModelLoaded(bool) { Rebuild(); }
@@ -219,7 +232,9 @@ void SavedEntryCatalog::BookmarkNodeRemoved(const BookmarkNode*,
   Rebuild();
 }
 void SavedEntryCatalog::BookmarkNodeChanged(const BookmarkNode*) { Rebuild(); }
-void SavedEntryCatalog::BookmarkMetaInfoChanged(const BookmarkNode*) { Rebuild(); }
+void SavedEntryCatalog::BookmarkMetaInfoChanged(const BookmarkNode*) {
+  Rebuild();
+}
 void SavedEntryCatalog::BookmarkNodeFaviconChanged(const BookmarkNode*) {}
 void SavedEntryCatalog::BookmarkNodeChildrenReordered(const BookmarkNode*) {
   Rebuild();

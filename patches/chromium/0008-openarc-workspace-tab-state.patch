@@ -1,0 +1,65 @@
+diff --git a/chrome/browser/ui/tabs/public/tab_features.h b/chrome/browser/ui/tabs/public/tab_features.h
+--- a/chrome/browser/ui/tabs/public/tab_features.h
++++ b/chrome/browser/ui/tabs/public/tab_features.h
+@@ -161,6 +161,10 @@
+ class PermissionIndicatorsTabData;
+ }  // namespace permissions
+ 
++namespace openarc::workspace {
++class WorkspaceTabState;
++}  // namespace openarc::workspace
++
+ namespace webapps {
+ class AppBannerManagerDesktop;
+ }  // namespace webapps
+@@ -721,6 +725,10 @@
+   // Observes changes in web contents for web payments.
+   std::unique_ptr<payments::WebPaymentsObserver> web_payments_observer_;
+ 
++  // Memory-only workspace identifiers follow this real tab across discard.
++  // Destroy before peer features; the owning TabModel and its host outlive us.
++  std::unique_ptr<openarc::workspace::WorkspaceTabState> workspace_tab_state_;
++
+   // Must be the last member.
+   base::WeakPtrFactory<TabFeatures> weak_factory_{this};
+ };
+diff --git a/chrome/browser/ui/tabs/tab_features.cc b/chrome/browser/ui/tabs/tab_features.cc
+--- a/chrome/browser/ui/tabs/tab_features.cc
++++ b/chrome/browser/ui/tabs/tab_features.cc
+@@ -167,6 +167,8 @@
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/wallet/core/common/wallet_features.h"
+ #include "net/base/features.h"
++#include "openarc/workspace/features.h"
++#include "openarc/workspace/workspace_tab_state.h"
+ #include "ui/accessibility/accessibility_features.h"
+ #include "ui/base/unowned_user_data/user_data_factory.h"
+ 
+@@ -206,6 +208,15 @@
+       tab.RegisterWillDiscardContents(base::BindRepeating(
+           &TabFeatures::WillDiscardContents, weak_factory_.GetWeakPtr())));
+   tab_subscriptions_.push_back(webui::InitEmbeddingContext(&tab));
++
++  if (base::FeatureList::IsEnabled(
++          openarc::workspace::features::kOpenArcWorkspaces)) {
++    // Every real tab may carry this ephemeral state across window moves,
++    // including OTR, app and popup tabs. No service or writer is created here.
++    workspace_tab_state_ =
++        GetUserDataFactory()
++            .CreateInstance<openarc::workspace::WorkspaceTabState>(tab, tab);
++  }
+ 
+   // TODO(crbug.com/346148554): Do not create a SidePanelRegistry or
+   // dependencies for non-normal browsers.
+diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
+--- a/chrome/browser/ui/tabs/BUILD.gn
++++ b/chrome/browser/ui/tabs/BUILD.gn
+@@ -634,6 +634,8 @@
+       "//components/tabs:impl",
+       "//components/wallet/core/common:features",
+       "//net",
++      "//openarc/workspace:features",
++      "//openarc/workspace:workspace_tab_state",
+       "//ui/base/unowned_user_data",
+       "//ui/webui",
+     ]

@@ -1,14 +1,15 @@
-# Workspace helper preparation
+# Native workspace foundation
 
 `ReconcileAssociations` is a pure helper over identifier snapshots supplied by a
 future browser adapter. Its header documents validation, caller priority order,
 and the separate group-reconciliation responsibility. It has no URL data, I/O,
 tab ownership, or persistence.
 
-This is preparation for the saved-tab model, **not M3 completion**. The local
-`BUILD.gn` describes proposed targets; no overlay or Chromium target includes it
-yet, and it has not been built through GN. Browser/profile factories, session
-integration, private-window behavior, and the custom sidebar remain unverified.
+This is preparation for the saved-tab model, **not M3 completion**. The owned source overlay installs these modules at Chromium's
+`openarc/workspace` path. GN generation, header dependency checks, compilation,
+linking and execution passed for four focused native test executables.
+Browser/profile factories, session integration, private-window behavior, and the
+custom sidebar remain unverified in a running browser.
 
 `EncodeTabSessionMetadata` and `DecodeTabSessionMetadata` are a tab-only JSON
 codec. Version 1 uses exact arrays: `[1,"unbound"]`, `[1,"bound","space-uuid"]`,
@@ -76,6 +77,8 @@ without closing pages, and must not treat loading/updating as authoritative
 deletion. No observer callback retains a bookmark pointer. Consumers must copy
 snapshots they retain and revalidate generation and locators before acting.
 Synchronous bookmark mutation from a catalog callback is unsupported.
+Observer teardown is supported: notification storage survives an owner being
+destroyed during a callback, and later callbacks skip that destroyed owner.
 
 The catalog currently rebuilds configured subtrees on relevant model callbacks
 and publishes only changed snapshots. It withholds rows during extensive
@@ -88,21 +91,72 @@ browser UI integration are still outside this component.
 ## Tab-owned association state
 
 `WorkspaceTabState` derives from Chromium's `ContentsObservingTabFeature` and
-registers through the real tab's unowned-data host. The proposed TabFeatures
-owner has not been wired yet. Its identifier binding survives navigation and
+registers through the real tab's unowned-data host. Patch 0008 wires its
+TabFeatures ownership behind the default-off OpenArcWorkspaces feature. Its identifier binding survives navigation and
 WebContents replacement during discard; a detach signal does not clear it.
-Only the future `WorkspaceWindowController` may change the binding in production.
+Only `WorkspaceWindowController` may change the binding in production.
 Invalid updates preserve the previous value, repeated values do not notify,
 and removing an Entry ID while retaining its Space remains distinct from
 clearing the complete association.
 
-The production and six `RenderViewHostTestHarness` test translation units have
-compiled with the pinned Chromium toolchain. Those six tests have not been
-linked or executed. They prepare checks for navigation/discard preservation,
+All seven `RenderViewHostTestHarness` cases passed in the GN-built
+`workspace_tab_state_tests` executable. They cover navigation/discard preservation,
 canceled-close-safe state, demotion and notification timing, invalid-input
-preservation, and unowned-data/subscription lifetime. The prepared GN targets
-have not run. No browser factory, TabFeatures ownership, window controller, or
-session integration is established by compilation.
+preservation, unowned-data/subscription lifetime, and destruction from a change
+observer. Notification storage survives the callback while weak subscriptions
+skip remaining callbacks after feature destruction. This establishes native
+component behavior, not session restoration or browser UI acceptance.
+
+## Default-Space window controller preparation
+
+`WorkspaceWindowController` uses the real `TabStripModel` and a read-only saved
+catalog. A navigation callback creates a normal browser tab; repeat activation
+focuses the existing bound page without navigation and retains the caller's
+activation gesture. A save completion binds the same page only after resolving
+its current bookmark locator and entry ID. Neither operation alters Chromium's
+pin bits, groups, native ordering, or real tab identity.
+
+Close uses the stock tab-strip delegate and reports a request, not a confirmed
+close. The association survives refusal/deferred close; confirmed strip removal
+drops only the window's claim. Transfer preserves tab-owned state. An existing
+destination-window claim wins a collision even when the incoming tab is inserted
+earlier, leaving both pages alive. Bookmark deletion demotes a saved page to an
+ordinary tab. Loading/extensive catalog updates preserve associations and keep
+pages reachable until a saved projection can be published again.
+
+The controller is deliberately limited to one default Space. It rejects private,
+guest, and non-normal windows. Other-Space bindings remain visible and intact
+for later integration; this is not Space switching or session restoration. It
+does not acquire profiles, write files, mutate bookmarks, or implement sidebar
+Views. Browser/profile ownership and a production navigation adapter are pending.
+
+All 15 cases passed in the GN-built `workspace_window_controller_tests`
+executable. They use real TabStripModel/BookmarkModel objects and cover activation,
+saved URL separation, pin/group preservation, close-request retention, deletion,
+batching, transfer collisions, stale completions, recursive activation, private
+rejection, and controller/strip destruction during callbacks.
+
+## GN native test checkpoint
+
+With the owned overlay and nine ordered patches applied, use the pinned output
+configuration documented in `docs/BUILDING.md`. Build these targets with the pinned
+`autoninja`, then run each executable with `--test-launcher-jobs=1` and
+`--test-launcher-retry-limit=0`:
+
+| Target | Passed cases |
+| --- | ---: |
+| `workspace_model_tests` | 84 |
+| `workspace_tab_state_tests` | 7 |
+| `workspace_window_controller_tests` | 15 |
+| `workspace_bookmark_write_tests` | 317 |
+
+The first target contains 40 association/codec, 18 catalog and 26 store/service
+cases. The bookmark target includes all 14 new primary-write acknowledgement
+cases. Local compilation/execution receipts, source hashes and launcher summaries
+are preserved under ignored `.build/native-workspace-gn`. All 28 overlay files
+and nine patch inputs were unchanged across execution. This test run does not
+produce a browser build receipt. The standalone recipes below record earlier,
+narrower helper checks and are not additional independent test counts.
 
 ## Standalone native test recipe
 
@@ -260,3 +314,81 @@ nested-root ambiguity, storage-scoped UUID lookup, extensive change batches,
 remove-all/model destruction, atomic invalid configuration rejection, unrelated
 edits, and rejection of permanent, managed, and URL roots. This validates the
 catalog's model behavior, not the future browser/profile/tab integration.
+
+## Bounded default-Space persistence service
+
+`WorkspaceService` adds explicit creation of one default Space and saving one
+bookmark at a time. Creation does not run automatically when a profile loads.
+The service waits for both its record and the real BookmarkModel. Its snapshot
+distinguishes loading, ready, writes in progress, recovery, and shutdown; catalog
+root availability remains a separate property. It has no general rename/move/
+delete API, tab navigation, or session persistence.
+
+`WorkspaceRecordStore` writes the fixed regular-profile files
+`OpenArcWorkspaces.json` and `OpenArcWorkspaces.previous.json` on a sequenced
+worker. Schema 1 is an exact array containing version, monotonic revision,
+default Space ID, label/icon/theme, optional local bookmark locators for the
+container and root, and an optional creation intent. The intent holds an
+operation ID, planned container/root/bookmark UUIDs, and an Entry ID. It never
+holds saved URLs or page titles. Input is limited to 64 KiB; unknown versions,
+malformed records, a missing primary with a previous copy, and changed files
+require recovery. Neither file is replaced until its bytes match the known
+load/write state. The previous copy is rotated from the known primary before
+atomic primary replacement. A retry can recognize that intermediate rotation.
+There is no automatic fallback to the previous copy or filesystem compare-and-
+swap: a future factory must own exactly one store per exclusively owned profile,
+and external changes during a commit are unsupported.
+
+A save first commits its intent, then creates user bookmark nodes with those
+known UUIDs and versioned `openarc.workspace.*.v1` metadata. The container marker
+is `openarc.workspace.container.v1`; its value, like the root marker, is the
+Space UUID. Native grouped bookmark actions remain visible to BookmarkUndoService.
+The service asks for a fresh primary BookmarkStorage write acknowledgement,
+revalidates the current bookmark identity, and only then clears the intent in
+the record. Applied identity and durable completion are distinct. Later bookmark
+edits retain normal BookmarkModel persistence semantics; an acknowledgement
+describes the captured snapshot, not every subsequent edit or power-loss safety.
+
+On restart, a surviving exact pending bookmark can be acknowledged and finalized
+without changing its content. Missing nodes are never recreated automatically.
+`RetryPendingSave` is an explicit new URL/title request for missing nodes; it
+preserves existing nodes and their current content. `AbandonPendingSave` retires
+only the intent and does not remove bookmarks. A write failure preserves recovery
+state; unrelated bookmark notifications cannot silently retry it. Recovery from
+an invalid record or a failed initial record write currently requires resolving
+the file condition and reloading the service; no broad repair API is provided.
+Root deletion preserves the Space, clears the missing root locator durably, and
+requires a subsequent explicit save to create a new root.
+
+Shutdown prevents later bookmark mutations, replies to pending commands with
+shutdown, and leaves already posted atomic writes free to finish using owned
+bytes. A destroyed record store replies with failure on the origin sequence;
+callers must use weak callbacks. Notification callbacks may destroy the service;
+later observers skip it. Final notifications keep the command busy until its
+completion is delivered, and saved identity is checked again after notification.
+
+Every nonregular persistence context is rejected before a record writer is
+constructed. This is only the module boundary: the browser factory must reject
+actual private contexts before getting a profile path or BookmarkModel, because
+Chromium redirects its bookmark service to the original profile. Custom private
+workspace UI remains disabled until a separate ephemeral backend exists.
+
+The standalone service suite currently passes 26 native tests using real
+BookmarkModel mutations and actual atomic record-file I/O in temporary test
+directories. These cover intent ordering, failed writes, preserved previous
+copies, pending-operation restart, no automatic recreation, authority of later
+edits, loading order, explicit abandon, callback destruction/reentrancy, and
+shutdown. The bookmark-acknowledgement callback is controlled by these tests;
+this suite does not substitute for running the production adapter. The separate
+scratch BookmarkModel/BookmarkStorage acknowledgement patch passed nine real
+cleartext runtime cases; its added upstream encrypted-primary cases compiled
+but have not run.
+
+To reproduce the service suite with the standalone catalog recipe above, use
+`.build/native-workspace-service-tests` as `test_output`, replace
+`saved_entry_catalog_unittest.cc` with `workspace_service_unittest.cc`, and add
+`workspace_record_store.cc` and `workspace_service.cc` to its source list. Keep
+the catalog implementation, standalone main, Chromium sources/libraries, and
+the two resource arguments. The prepared GN `workspace_model_tests` target also
+includes this suite. GN execution, factory/window integration, and the custom
+sidebar are separate checks and are not established by these standalone tests.
