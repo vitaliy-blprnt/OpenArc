@@ -41,6 +41,7 @@ does not promise this revision remains current after this checkpoint.
 | Hosted source checks | Passed on Linux/macOS for checkpoint `f718cc8`, including 67 Python and 21 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37177446663)); native helper compilation is separate local evidence |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
+| Upstream patch rehearsal | All three patches apply and reverse cleanly against candidate 155.0.8059.26; SDK and vertical-tab seams inspected. [Evidence and limits](research/upstream-rehearsal.md); full upgrade/rebuild/runtime checks pending |
 | Visible OpenArc browser UI | Not tested |
 | Reference-browser fixture | Fixture 0.1.0: 19 API checks and synthetic native nonce/pong exchange passed in installed Chrome 154.0.8037.59 (ARM64), with mock Keychain and a dedicated profile; popup rendering, user-gesture side panel, side-panel dashboard action, and Options entry observed. Fixture 0.2.0 adds pin/group checks (21 total); its browser run is pending |
 | OpenArc Chrome Web Store / extension runtime / native integration | Not tested; reference-browser fixture results do not qualify OpenArc |
