@@ -269,6 +269,18 @@ test("a newly added foreign tab prevents synthetic group metadata mutation", asy
   assert.deepEqual(harness.mutations, [["group", 11, 12]]);
 });
 
+test("group metadata read cannot authorize a later rename after a foreign member arrives", async () => {
+  const harness = structureHarness();
+  const get = harness.groups.get;
+  harness.groups.get = async (id) => {
+    const group = await get(id);
+    harness.pages().push({id: 99, windowId: 7, index: 2, groupId: id, url: "https://private.example/secret"});
+    return group;
+  };
+  await assert.rejects(groupRoundTrip(harness.tabs, harness.groups, harness.context), /membership or page ownership changed/);
+  assert.deepEqual(harness.mutations, [["group", 11, 12]]);
+});
+
 test("interrupted grouping is cleaned using only journaled owned tab IDs", async () => {
   const harness = structureHarness();
   await harness.tabs.group({tabIds: harness.context.ids, createProperties: {windowId: 7}});

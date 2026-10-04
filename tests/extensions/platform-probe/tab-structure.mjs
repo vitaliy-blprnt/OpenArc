@@ -57,6 +57,10 @@ export async function groupRoundTrip(tabs, groups, context) {
   let group = await groups.get(groupId);
   assert(group.id === groupId && group.windowId === context.windowId && group.shared !== true,
     "Created group is outside the synthetic window or is unexpectedly shared.");
+  // The metadata read awaited browser work; refresh membership before writing.
+  current = await fixturePair(tabs, context);
+  assert(current.every((tab) => tab.groupId === groupId),
+    "Synthetic group membership changed before metadata update.");
   const title = `${prefix(context.runId)} group`;
   await groups.update(groupId, {title, color: "purple", collapsed: false});
   group = await groups.get(groupId);
