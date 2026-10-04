@@ -198,6 +198,24 @@ Never replace the development profile with a link to a Chrome, Arc, Chromium,
 or daily-use OpenArc profile. Chromium owns its data compatibility, while future
 OpenArc metadata has its own migration requirements.
 
+On macOS the launcher calls `/usr/bin/open -n -a` with the exact verified `.app`
+path and passes the complete isolated-profile argument list after `--args`.
+This registers the intended GUI instance through LaunchServices. Opening an app
+by display name, bundle ID, or a later automation-tool app selection can activate
+another instance without those arguments; do not use that as launch evidence.
+
+The JSON result preserves the browser argument list and the LaunchServices
+command. It reports `pid: null`: `open` is a short-lived helper, and its PID is
+not a verified browser PID. Success means LaunchServices accepted the request,
+not that the browser is running correctly. Verify the executable, command line,
+and profile path in `chrome://version`, then separately observe the UI and
+browsing. Any process-specific diagnostic or shutdown must first verify that
+exact process belongs to this isolated launch; never terminate browsers by app
+name. The launcher does not look up or terminate browser processes. Its log contains
+LaunchServices diagnostics, not a guaranteed browser console log. If the bounded
+launch request times out, inspect the exact app/profile before retrying: the
+browser may already have started.
+
 The baseline may retain Chromium branding until the application integration and
 branding milestones are implemented. Do not infer a saved-tab or Space feature
 from the output-directory name. Use disposable data for tests; do not include

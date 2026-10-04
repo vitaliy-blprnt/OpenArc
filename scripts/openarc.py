@@ -593,15 +593,34 @@ class Workflow:
     def launch(self, url: str | None, baseline: bool = False) -> None:
         self.require_mac()
         args = self.launch_command(url, baseline)
+        bundle = self.safe_path(Path(args[0]).parents[2])
+        # Use the exact verified bundle, not its shared display name/bundle ID.
+        # -n ensures LaunchServices passes the isolated profile arguments to a
+        # new app instance rather than activating a differently launched one.
+        launch_args = ["/usr/bin/open", "-n", "-a", str(bundle), "--args", *args[1:]]
         log_path = self.safe_path(self.work / "logs" / ("baseline-launch.log" if baseline else "launch.log"))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
-            child = subprocess.Popen(args, cwd=self.src, env=self.env, stdin=subprocess.DEVNULL,
-                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        qualification = "Process started; visible UI and browsing have not been verified by this command."
+            try:
+                result = subprocess.run(launch_args, cwd=self.src, env=self.env, stdin=subprocess.DEVNULL,
+                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                        timeout=30, check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise WorkflowError("LaunchServices did not finish within 30 seconds; the browser may have started. "
+                                    "Verify the exact application and profile before retrying. "
+                                    f"Launcher diagnostics: {log_path}") from exc
+            except OSError as exc:
+                raise WorkflowError(f"Cannot invoke macOS LaunchServices: {exc}") from exc
+        if result.returncode:
+            raise WorkflowError(f"LaunchServices failed ({result.returncode}); inspect launcher diagnostics: {log_path}")
+        qualification = ("LaunchServices accepted the exact application launch request; browser PID, actual profile, "
+                         "visible UI and browsing have not been verified by this command.")
         if baseline:
             qualification += " Baseline uses a mock Keychain and a synthetic test profile only: do not enter real credentials. Credential storage and native password-manager qualification are excluded."
-        print(json.dumps({"pid": child.pid, "command": args, "log": str(log_path),
+        # open's PID belongs to the short-lived helper, not the browser. Do not
+        # guess a PID from an application name or create a termination target.
+        print(json.dumps({"pid": None, "command": args, "launch_command": launch_args,
+                          "launch_mechanism": "macOS LaunchServices via open -n", "log": str(log_path),
                           "qualification": qualification}, indent=2))
 
     def check(self, checkout: bool = False) -> None:

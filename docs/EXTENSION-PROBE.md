@@ -6,6 +6,35 @@ No browser execution is implied by its presence in the repository. A static
 check or a passing fixture run does not establish Web Store compatibility,
 native password-manager integration, or support for every Chrome extension.
 
+## Recorded baseline result
+
+On 4 October 2026, fixture **0.3.0** passed all **22 automated checks** in the
+locally built, unmodified Chromium **154.0.8037.98 ARM64** baseline. The separate
+native check returned the exact nonce/pong protocol 1 reply. Native UI inspection
+verified `chrome://version`, the executable under
+`.build/chromium/src/out/Baseline/Chromium.app`, the isolated
+`.build/profiles/baseline/Default` profile, and example.com rendering.
+
+All six manual surfaces were also observed: the toolbar popup, its dashboard
+action, the Options entry, a side panel opened through the popup's user gesture,
+the side-panel dashboard action from a webpage, and the visible webpage
+context-menu dashboard action. These observations are recorded separately from
+the automated report's unchanged `manualSurfaces` field.
+
+The local reports are ignored at `.build/reports/baseline-extension-probe.json`
+and `.build/reports/baseline-ui-observations.json`. The native host was
+unregistered and the owned baseline process exited afterward. This run used mock
+Keychain and synthetic data. It proves the tested unpacked fixture paths in
+that unmodified baseline; it does not qualify patched OpenArc, Web Store
+installation/update, signed identity, vendor native integration, credentials,
+or universal extension compatibility. The OpenArc build is currently in progress
+and requires its own run.
+
+The fixture's reduced user-agent string does not establish the full build
+version or architecture; those came from native UI and build evidence. The zero
+revision displayed by this non-official baseline is intentional under
+`use_dummy_lastchange`; its build receipt records the real locked source SHA.
+
 ## Use an isolated profile
 
 Use only an isolated development browser profile, such as the profile created by
@@ -70,8 +99,9 @@ Those modes target `.build/profiles/baseline/NativeMessagingHosts` and
 `.build/profiles/development/NativeMessagingHosts` respectively. The optional
 `--reference` mode targets only
 `.build/profiles/fixture-reference/NativeMessagingHosts`. No mode registers a host
-in system or daily-use browser locations. Host discovery in the actual built
-browser still needs verification.
+in system or daily-use browser locations. Host discovery and the synthetic
+exchange passed in the unmodified baseline described above; patched OpenArc
+still needs its own verification.
 
 To validate the fixture against a separately installed Chromium-based reference
 browser, launch it with this repository's absolute
@@ -120,12 +150,13 @@ this synthetic exchange proves only that transport path in the tested build.
 | Cleanup | Remove recorded, unchanged fixture resources; preserve unexpected content |
 
 Fixture version **0.3.0** adds one tab-event delivery check, bringing the default
-suite to 22 checks. The event check and the pin/unpin and tab-group checks added
-in 0.2.0 have source-test validation only; they have **not yet been run in a
-browser**. Earlier 0.1.0 reports do not cover them. Reload the unpacked extension,
-accept its added `tabGroups` permission if upgrading from 0.1.0, and run the
-complete suite to produce new browser evidence. Source tests and reference-browser
-runs do not qualify OpenArc compatibility.
+suite to 22 checks. All 22, including the pin/unpin and tab-group checks added in
+0.2.0, passed in the locally built Chromium baseline recorded above. Earlier
+0.1.0 reports do not cover the new checks. Reload the unpacked extension, accept
+its added `tabGroups` permission if upgrading from 0.1.0, and run the complete
+suite against each new browser build. The patched OpenArc run remains pending;
+source tests, reference-browser runs, and the unmodified baseline do not qualify
+its compatibility.
 
 Structure checks query only the synthetic window and stop if it contains more
 than the expected two recorded, nonce-owned tabs. They do not record unexpected
@@ -191,7 +222,7 @@ extension after testing and dispose of the dedicated test profile when done.
 
 ## Checks that do not launch a browser
 
-The scope guards have dependency-free Node tests:
+The scope guards have 31 passing dependency-free Node tests at this checkpoint:
 
 ```sh
 node --test tests/extensions/platform-probe/scope.test.mjs

@@ -363,6 +363,122 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(openarc.WorkflowError, "HTTP|http"):
                 workflow.launch_command(url)
 
+    def test_launchservices_uses_exact_verified_bundle_and_preserves_browser_arguments(self):
+        self.repository()
+        workflow = self.workflow()
+        for baseline in (False, True):
+            with self.subTest(baseline=baseline):
+                executable = self.executable(workflow, output=workflow.baseline_output if baseline else workflow.output)
+                self.simulated_build(workflow, baseline=baseline)
+                url = "https://example.com/?query=two%20words&literal=$(unchanged)"
+                expected = workflow.launch_command(url, baseline)
+                calls = []
+                real_run = subprocess.run
+
+                def launch_helper(args, **kwargs):
+                    if args[0] != "/usr/bin/open":
+                        return real_run(args, **kwargs)
+                    calls.append((args, kwargs))
+                    result = subprocess.CompletedProcess(args, 0)
+                    result.pid = 12345  # A helper PID must never become a browser PID.
+                    return result
+
+                with patch.object(workflow, "require_mac"), \
+                        patch.object(openarc.subprocess, "run", side_effect=launch_helper), \
+                        patch("builtins.print") as output:
+                    workflow.launch(url, baseline)
+                report = json.loads(output.call_args.args[0])
+                self.assertEqual(len(calls), 1)
+                command, options = calls[0]
+                self.assertEqual(command, ["/usr/bin/open", "-n", "-a", str(executable.parents[2]),
+                                           "--args", *expected[1:]])
+                self.assertEqual(report["command"], expected)
+                self.assertEqual(report["launch_command"], command)
+                self.assertIn("LaunchServices", report["launch_mechanism"])
+                self.assertIsNone(report["pid"])
+                self.assertIn("have not been verified", report["qualification"])
+                self.assertEqual(options["timeout"], 30)
+                self.assertFalse(options.get("shell", False))
+                self.assertEqual(options["stdin"], subprocess.DEVNULL)
+                self.assertEqual(options["cwd"], workflow.src)
+                self.assertEqual(options["stdout"].name, report["log"])
+                self.assertTrue(options["stdout"].closed)
+                self.assertEqual("--use-mock-keychain" in command, baseline)
+                self.assertNotIn("--no-sandbox", command)
+
+    def test_launchservices_failures_never_report_a_browser_start_or_retry(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        real_run = subprocess.run
+        for failure, message in ((3, "LaunchServices failed"),
+                                 (subprocess.TimeoutExpired("/usr/bin/open", 30), "may have started"),
+                                 (OSError("helper unavailable"), "Cannot invoke macOS LaunchServices")):
+            with self.subTest(failure=failure):
+                calls = []
+
+                def launch_helper(args, **kwargs):
+                    if args[0] != "/usr/bin/open":
+                        return real_run(args, **kwargs)
+                    calls.append(args)
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return subprocess.CompletedProcess(args, failure)
+
+                with patch.object(workflow, "require_mac"), \
+                        patch.object(openarc.subprocess, "run", side_effect=launch_helper), \
+                        patch("builtins.print") as output:
+                    with self.assertRaisesRegex(openarc.WorkflowError, message):
+                        workflow.launch(None)
+                self.assertEqual(len(calls), 1)
+                output.assert_not_called()
+                self.assertTrue(workflow.build_receipt_path(False).is_file())
+
+    def test_launchservices_is_not_invoked_for_unverified_binary_or_unsafe_url(self):
+        self.repository()
+        workflow = self.workflow()
+        executable = self.executable(workflow)
+        self.simulated_build(workflow)
+        calls = []
+        real_run = subprocess.run
+
+        def no_launch(args, **kwargs):
+            if args[0] == "/usr/bin/open":
+                calls.append(args)
+                raise AssertionError("LaunchServices must not run before validation")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(openarc.subprocess, "run", side_effect=no_launch):
+            with self.assertRaisesRegex(openarc.WorkflowError, "http"):
+                workflow.launch("--user-data-dir=/private/existing-profile")
+            executable.write_text("changed binary\n")
+            with self.assertRaisesRegex(openarc.WorkflowError, "executable or bundle identity changed"):
+                workflow.launch(None)
+        self.assertEqual(calls, [])
+
+    def test_launchservices_rejects_redirected_log_before_invocation(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        log = workflow.work / "logs/launch.log"
+        log.parent.mkdir()
+        protected = self.root / "unrelated-data"
+        protected.write_text("preserve\n")
+        log.symlink_to(protected)
+        real_run = subprocess.run
+
+        def no_launch(args, **kwargs):
+            if args[0] == "/usr/bin/open":
+                raise AssertionError("A redirected log must never reach LaunchServices")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(openarc.subprocess, "run", side_effect=no_launch):
+            with self.assertRaisesRegex(openarc.WorkflowError, "symlink"):
+                workflow.launch(None)
+        self.assertEqual(protected.read_text(), "preserve\n")
+
     def test_profile_symlink_cannot_redirect_launch_to_existing_browser(self):
         self.repository()
         workflow = self.workflow()
