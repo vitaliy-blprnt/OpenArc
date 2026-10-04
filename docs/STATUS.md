@@ -31,11 +31,11 @@ does not promise this revision remains current after this checkpoint.
 | Official release tag and exact commit resolution | Verified |
 | Host/toolchain preflight | Passed for attempting a development build |
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
-| Identity and vertical-tab patches against exact upstream source files | Apply/reverse and XML checks passed; compilation pending |
+| Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
 | Tooling test suite | 46 tests passed locally, including build provenance, dependency inventory/bootstrap, and synthetic native-host safeguards |
 | Extension fixture scope guards | 12 Node tests passed; no Chrome APIs executed |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `9ff6d0b` ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175254022)) |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `8c9da79`, including Python and Node probe tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175722037)) |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Visible browser UI | Not tested |

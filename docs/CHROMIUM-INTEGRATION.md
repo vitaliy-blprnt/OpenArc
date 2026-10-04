@@ -1,15 +1,16 @@
 # OpenArc: pinned Chromium integration map
 
-Research date: 3 October 2026. Source baseline: Chromium **154.0.8037.98**, commit **`b859317bf11f6be47f9b7799ec690a0a42a1fb33`**, matching `upstream.lock`. Findings below come from individual files fetched from the official Chromium Gitiles repository at that exact revision. No full checkout, compilation, running-browser test, extension test, or code-signing verification was performed by this reconnaissance task.
+Research date: 3 October 2026. Source baseline: Chromium **154.0.8037.98**, commit **`b859317bf11f6be47f9b7799ec690a0a42a1fb33`**, matching `upstream.lock`. Initial findings came from individual files fetched from the official Chromium Gitiles repository at that revision; the AI audit also inspected the pinned local checkout. Patch validation uses isolated copies of exact-revision source files. This reconnaissance task did not compile Chromium or verify browser behavior, extension compatibility, or code signing.
 
 ## Delivered patches and evidence
 
-`patches/chromium/series` orders two small patches:
+`patches/chromium/series` orders three small patches:
 
 1. **`0001-openarc-identity.patch`** changes the application/bundle identity, default profile directory, macOS Safe Storage identity, system native-host/external-extension registration paths, and five prominent product/helper strings. It retains Chromium's copyright attribution and does not enable Google Chrome branding.
 2. **`0002-openarc-vertical-tabs.patch`** changes the registered native vertical-tab preference default from false to true. An explicit existing preference remains authoritative; this is not a forced startup override.
+3. **`0003-openarc-no-ai-defaults.patch`** disables the default feature gates for built-in Gemini, AI Mode entry points, Compose eligibility, launched AI history search, and Lens overlay. Already-disabled history-answer and Contextual Tasks controls remain unchanged. These are product defaults, not a hard ban or a complete AI-surface qualification.
 
-Both patches were checked against fresh copies of the six affected upstream files in an isolated temporary Git repository. Sequential `git apply --check` and apply passed; the patched source passed `git diff --check`; the application plist and GRIT XML parsed; the intended identity values were asserted; reverse application returned every source byte to upstream. These are patch-integrity checks, **not** Chromium build or behavior proof.
+All three patches were checked together against exact-revision copies of the eleven affected source files in an isolated temporary Git repository. Sequential indexed `git apply --check` and apply passed; the patched source passed `git diff --check`; the application plist and GRIT XML parsed. Identity values were checked in the initial validation; the combined validation additionally checked the five disabled defaults, preserved attribution headers, and unchanged history-answer and Contextual Tasks source files. Reverse application returned every copied source byte to upstream. Hashes of the inspected active-checkout files remained unchanged. These are patch-integrity checks, **not** Chromium build or behavior proof.
 
 ## Independent macOS identity
 
@@ -55,17 +56,35 @@ No new vertical-tabs enable feature flag was needed for this source change. Cont
 
 The pinned/unpinned containers and much of the view/model adapter now live under `chrome/browser/ui/views/tabs/common/`, not solely under `tabs/vertical/`. The upstream pinned container lays out live pinned tabs; it is not a durable Arc-style saved-entry store. Enabling vertical tabs therefore supplies the native starting surface, **not** saved-URL reset behavior, persistent unloaded bookmarks, Spaces, or the requested finished sidebar. [Pinned container](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc), [unpinned container](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc), [shared collection controller](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc).
 
+## Built-in AI defaults
+
+Patch 0003 changes five existing feature definitions to `base::FEATURE_DISABLED_BY_DEFAULT`:
+
+| Surface | Patched definition | Inspected gate behavior |
+| --- | --- | --- |
+| Gemini browser integration | `features::kGlic` in `chrome/common/chrome_features.cc` | The documented master kill switch controls global eligibility and the anchor retained for previously onboarded users. |
+| AI Mode browser entry points | `omnibox::kAimEnabled` in `components/omnibox/browser/aim_eligibility_service_features.cc` | The eligibility service returns before startup setup when disabled. Google and third-party omnibox entry points require this gate. |
+| Help Me Write / Compose | `compose::features::kComposeEligible` in `components/compose/core/browser/compose_features.cc` | Compose's enabling check rejects ineligible profiles before checking its separate Compose feature. |
+| AI history search | `history_embeddings::kLaunchedHistoryEmbeddings` in `chrome/browser/history_embeddings/history_embeddings_utils.cc` | Disables the launched country/locale fallback. `kHistoryEmbeddings` and `kHistoryEmbeddingsAnswers` already default off; changing only their defaults would leave that fallback available. |
+| Lens browser overlay | `lens::features::kLensOverlay` in `components/lens/lens_features.cc` | The overlay entry-point controller checks this gate before other eligibility conditions. |
+
+Sources: [Gemini definition](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/common/chrome_features.cc), [Gemini enabling](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/glic/public/glic_enabling.cc), [AI Mode definitions](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/omnibox/browser/aim_eligibility_service_features.cc), [AI Mode eligibility](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/omnibox/browser/aim_eligibility_service.cc), [omnibox entry points](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/omnibox/browser/omnibox_field_trial.cc), [Compose definitions](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/compose/core/browser/compose_features.cc), [Compose enabling](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/compose/compose_enabling.cc), [history fallback](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/history_embeddings/history_embeddings_utils.cc), [Lens definitions](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/lens/lens_features.cc), [Lens entry-point controller](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/lens/lens_overlay_entry_point_controller.cc).
+
+The patch removes the now-unused desktop-default constant in the history utility. It preserves the existing disabled history-feature definitions and all three disabled Contextual Tasks UI parent features: `kContextualTasks`, `kContextualTasksSidePanel`, and `kContextualTasksRearchitecture`. The vertical region's `gemini_button_` is currently an empty `views::View` placeholder; this patch leaves that layout code intact. [History definitions](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/history_embeddings/core/history_embeddings_features.cc), [Contextual Tasks definitions and UI gate](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/contextual_tasks/public/features.cc).
+
+Feature flags or field trials can override these defaults. This patch does not install enterprise policies, disable web APIs or extensions, block websites, or remove shared browser services. Optional AI websites and extensions remain within the normal browser compatibility scope. Other upstream AI surfaces and actual absence of the targeted controls still require runtime inspection; no-AI product qualification remains pending.
+
 ## Lowest-risk next native slice
 
 These are proposed integration steps, not implemented functionality:
 
-1. Build and launch the two patches in an isolated profile. Confirm product/bundle identity, vertical tab activation, normal popup behavior, regular navigation, extension actions and relaunch persistence before expanding the patch set.
+1. Build and launch the three patches in an isolated profile. Confirm product/bundle identity, vertical tab activation, the targeted AI defaults, normal popup behavior, regular navigation, extension actions and relaunch persistence before expanding the patch set.
 2. Add a profile-scoped workspace service and a real-tab adapter with the `BROWSER-PLAN.md` state contract. Persist saved destination separately from current navigation. Keep native tab/session ownership in Chromium.
 3. Add durable Saved rows and a bottom Space selector to the existing Views region. A saved row without a live tab should be a workspace control; do not invent a Chromium tab solely to make it visible. Activation creates or focuses its real tab. Closing it removes the live tab while keeping the saved row.
 4. Extend the shared collection presentation carefully for the current Space. Keep extension-visible indices, groups, pin ordering and events truthful, even when rows from another Space are not displayed. Native pinned tabs cannot simply be renamed Saved without implementing the different lifetime semantics.
 5. Add explicit Save/Unpin/Remove/Return-to-saved-URL commands and preserve full labels in the saved section. Keep ordinary browser toolbar/permission/extension surfaces until their relocation has equivalent behavior and accessibility evidence.
 
-The source has upstream AI-related integration points, including a Gemini placeholder in the vertical region. These patches do not audit or disable every upstream AI surface. The product's no-AI requirement remains an explicit follow-up, using verified build/feature seams rather than deleting unrelated browser services. No SwiftUI, Electron, or separate page-rendering shell is introduced.
+Patch 0003 establishes narrowly audited AI defaults. Completing the product's no-AI requirement still needs a broader UI audit and runtime checks, including new-tab, history, settings, menus, writing-assistant entry points and relaunch. No SwiftUI, Electron, or separate page-rendering shell is introduced.
 
 ## Build and release hazards
 

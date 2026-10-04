@@ -10,7 +10,8 @@ browser platform rather than implementing a subset of extension APIs.
 
 The initial foundation includes a pinned Chromium/depot_tools checkout workflow,
 an isolated development launcher, an ordered patch series for OpenArc's macOS
-identity and native vertical-tab default, and tooling tests. The Arc-style saved
+identity, native vertical-tab default, and built-in AI feature defaults, plus
+tooling tests. The Arc-style saved
 tab lifecycle and Spaces are not implemented yet. There is no qualified browser
 release or download.
 
