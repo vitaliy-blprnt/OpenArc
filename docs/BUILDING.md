@@ -129,6 +129,11 @@ preserved and block the operation; failures retain the remaining recorded prefix
 for review or retry. It never resets, cleans, or stashes the checkout. Repeating
 the command when no patches remain is harmless.
 
+An interruption after Git reverses a patch but before its checkpoint is saved
+leaves the ledger out of sync. The next invocation fails closed; inspect and
+reconcile that state manually before retrying. Automatic retry is covered only
+between completed checkpoints.
+
 Build receipts and historical promotion evidence remain intact; removing patches
 does not authorize launching mismatched binaries or restore a promoted baseline.
 The matching empty patch state is retained for reapplication at the same pin.

@@ -1,6 +1,6 @@
 # OpenArc implementation status
 
-Updated 3 October 2026. This file records evidence, not inferred completion.
+Updated 4 October 2026. This file records evidence, not inferred completion.
 
 ## Current checkpoint
 
@@ -38,7 +38,7 @@ does not promise this revision remains current after this checkpoint.
 | Extension fixture scope guards | 21 Node tests passed; includes browser timer receiver binding, pin/group checks, and interrupted group cleanup guards |
 | Native model preparation | 24 C++ tests passed for association reconciliation and the bounded tab-session codec after standalone compilation with the pinned Chromium Clang, headers, libbase, and libc++; the documented recipe was executed. GN/browser integration has not been run |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `f718cc8`, including 67 Python and 21 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37177446663)); native helper compilation is separate local evidence |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `235690c`, including 73 Python and 21 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37178485176)); native helper compilation is separate local evidence |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Upstream patch rehearsal | All three patches apply and reverse cleanly against candidate 155.0.8059.26; SDK and vertical-tab seams inspected. [Evidence and limits](research/upstream-rehearsal.md); full upgrade/rebuild/runtime checks pending |
