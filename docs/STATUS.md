@@ -35,13 +35,13 @@ does not promise this revision remains current after this checkpoint.
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
 | Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
 | Tooling test suite | 48 tests passed locally, including build provenance, dependency inventory/bootstrap, and isolated reference native-host safeguards |
-| Extension fixture scope guards | 13 Node tests passed; includes regression for native browser timer receiver binding |
+| Extension fixture scope guards | 20 Node tests passed; includes browser timer receiver binding, pin/group checks, and interrupted group cleanup guards |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `18f1967`, including Python and Node probe tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175998861)); later local test additions are not implied by that run |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `57ce609`, including 48 Python and 13 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37176929227)); later local test additions are not implied by that run |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Visible OpenArc browser UI | Not tested |
-| Reference-browser fixture | 19 API checks and synthetic native nonce/pong exchange passed in installed Chrome 154.0.8037.59 (ARM64), with mock Keychain and a dedicated profile; popup rendering, user-gesture side panel, side-panel dashboard action, and Options entry observed |
+| Reference-browser fixture | Fixture 0.1.0: 19 API checks and synthetic native nonce/pong exchange passed in installed Chrome 154.0.8037.59 (ARM64), with mock Keychain and a dedicated profile; popup rendering, user-gesture side panel, side-panel dashboard action, and Options entry observed. Fixture 0.2.0 adds pin/group checks (21 total); its browser run is pending |
 | OpenArc Chrome Web Store / extension runtime / native integration | Not tested; reference-browser fixture results do not qualify OpenArc |
 | Arc-style saved tabs and Spaces | Not implemented |
 | Signed release and updater | Not implemented |

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "OpenArc Platform Probe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "User-triggered diagnostics for an isolated OpenArc development profile.",
   "minimum_chrome_version": "123",
-  "permissions": ["tabs", "storage", "bookmarks", "sessions", "scripting", "contextMenus", "sidePanel", "nativeMessaging"],
+  "permissions": ["tabs", "tabGroups", "storage", "bookmarks", "sessions", "scripting", "contextMenus", "sidePanel", "nativeMessaging"],
   "host_permissions": ["https://example.com/*"],
   "background": {"service_worker": "worker.js", "type": "module"},
   "action": {"default_title": "OpenArc Platform Probe", "default_popup": "popup.html"},

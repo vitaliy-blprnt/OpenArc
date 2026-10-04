@@ -10,7 +10,7 @@ native password-manager integration, or support for every Chrome extension.
 
 Use only an isolated development browser profile, such as the profile created by
 the repository launcher. Do not load this diagnostic in your daily browsing
-profile. It needs the `tabs`, `bookmarks`, `sessions`, `storage`, `scripting`,
+profile. It needs the `tabs`, `tabGroups`, `bookmarks`, `sessions`, `storage`, `scripting`,
 `contextMenus`, `sidePanel`, and `nativeMessaging` permissions. The only web host permission is
 `https://example.com/*`; there is no blanket host access, cookies permission,
 remote script, or evaluation of downloaded code.
@@ -111,10 +111,24 @@ this synthetic exchange proves only that transport path in the tested build.
 | Context menus | Create/update/remove one uniquely named item; visible behavior remains manual |
 | Side panel | Read the packaged panel's configured path and enabled state |
 | Tabs | Create a separate fixture window and nonce-labeled pages; query that label, move, navigate, mute, and remove recorded fixture IDs |
+| Pin/unpin | Pin the second real tab, read back pinned-first ordering and zero-based indices, unpin it, then restore the original synthetic order |
+| Tab groups | Group only the two recorded synthetic tabs; get/update/query group title and color; verify tab membership and indices; ungroup both and confirm the group disappears |
 | Bookmarks | Create a uniquely labeled tree; create/move a bookmark and folder, rename a folder, remove the bookmark and empty fixture folders |
 | Content injection | Inject a packaged function into only the nonce-bearing example.com tab, verify a temporary DOM marker, remove that marker |
 | Sessions | Close the fixture's example.com tab and restore only its verified session ID |
 | Cleanup | Remove recorded, unchanged fixture resources; preserve unexpected content |
+
+Fixture version **0.2.0** adds the pin/unpin and tab-group checks, bringing the
+default suite to 21 checks. These additions have scope/unit validation only;
+they have **not yet been run in a browser**. Earlier 0.1.0 reports do not cover
+them. Reload the unpacked extension, accept its added `tabGroups` permission,
+and run the complete suite to produce new browser evidence.
+
+Structure checks query only the synthetic window and stop if it contains more
+than the expected two recorded, nonce-owned tabs. They do not record unexpected
+tabs, group titles, or URLs. Group queries use that window and this run's unique
+title. No broad tab/group event listeners are installed; event delivery itself
+is not covered by these checks.
 
 The sessions API cannot filter recently closed entries by extension ownership.
 The probe asks for only the newest entry, compares its tab URL to this run's exact
@@ -133,6 +147,12 @@ before removing a bookmark. It removes folders only when empty, never using
 recursive deletion. It never closes an entire window, so a user-added page is
 not removed along with the fixture. Do not navigate fixture tabs or edit its
 bookmark tree while tests run.
+
+Cleanup ungroups each verified fixture tab before closing it, then rechecks its
+ownership after ungrouping. Because both tab IDs are journaled before grouping,
+an interruption during a group operation uses the same recovery path without
+trusting a saved group ID or changing group metadata. Unrelated group members
+are never selected for cleanup.
 
 If interrupted, reopen the dashboard and select **Clean up unfinished fixture**.
 Changed resources are preserved and reported; resolve those manually in the
@@ -162,13 +182,15 @@ The scope guards have dependency-free Node tests:
 node --test tests/extensions/platform-probe/scope.test.mjs
 ```
 
-They verify rejection of foreign/changed resources and cleanup ordering. They
+They verify rejection of foreign/changed resources, pinned-order assertions,
+group-operation boundaries, interrupted-group cleanup, and cleanup ordering. They
 do not execute Chrome APIs. JavaScript parsing and manifest validation are also
 static checks; only an actual dashboard run supplies browser API evidence.
 
 ## Official API references
 
 The fixture follows Chrome's MV3 APIs for [tabs](https://developer.chrome.com/docs/extensions/reference/api/tabs),
+[tab groups](https://developer.chrome.com/docs/extensions/reference/api/tabGroups),
 [bookmarks](https://developer.chrome.com/docs/extensions/reference/api/bookmarks),
 [sessions](https://developer.chrome.com/docs/extensions/reference/api/sessions),
 [storage](https://developer.chrome.com/docs/extensions/reference/api/storage),

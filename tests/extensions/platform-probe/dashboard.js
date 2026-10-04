@@ -1,6 +1,7 @@
 // Copyright 2026 OpenArc contributors. SPDX-License-Identifier: BSD-3-Clause
 import {LEDGER_KEY, REPORT_KEY, prefix, fixtureURL, exampleURL, ownsURL, ownsBookmark, bookmarkCleanupOrder, validateLedger, ProbeError, Blocked, diagnosticMessage} from "./scope.mjs";
 import {checkNativeHost} from "./native.mjs";
+import {pinRoundTrip, groupRoundTrip, removeOwnedTab} from "./tab-structure.mjs";
 
 const base = chrome.runtime.getURL("/");
 const ui = Object.fromEntries(["run", "cleanup", "export", "isolated", "status", "results", "native", "native-status"].map((id) => [id, document.getElementById(id)]));
@@ -12,7 +13,9 @@ const CHECKS = [
   ["session", "storage.session round trip"], ["menu", "Context menu registration"],
   ["panel", "Side-panel configuration"], ["window", "Synthetic window setup"],
   ["create", "tabs.create"], ["query", "tabs.query (fixture only)"],
-  ["move", "tabs.move"], ["update", "tabs.update"], ["remove", "tabs.remove"],
+  ["move", "tabs.move"], ["pin", "tabs.update pin/unpin and real ordering"],
+  ["groups", "Tab-group metadata and membership round trip"],
+  ["update", "tabs.update"], ["remove", "tabs.remove"],
   ["bookmarks-create", "bookmarks.create"], ["bookmarks-move", "bookmarks.move"],
   ["bookmarks-update", "bookmarks.update"], ["bookmarks-remove", "bookmarks.remove"],
   ["example", "Synthetic example.com tab"], ["inject", "Content-script injection"],
@@ -100,8 +103,7 @@ async function loaded(id) {
 }
 
 async function removeTab(id) {
-  await fixtureTab(id);
-  await chrome.tabs.remove(id);
+  await removeOwnedTab(chrome.tabs, id, fixtureTab);
   ledger.tabs = ledger.tabs.filter((item) => item !== id);
   await writeLedger();
 }
@@ -263,6 +265,9 @@ async function runWithLock() {
       const moved = await chrome.tabs.move(second, {windowId, index: 0});
       assert(moved.id === second && moved.index === 0, "Move result did not match the fixture tab/index.");
     });
+    const structureContext = () => ({base, runId, windowId, ids: [first, second], recordedIds: ledger.tabs});
+    await step("pin", () => pinRoundTrip(chrome.tabs, structureContext()));
+    await step("groups", () => groupRoundTrip(chrome.tabs, chrome.tabGroups, structureContext()));
     await step("update", async () => {
       await fixtureTab(second);
       const updated = await chrome.tabs.update(second, {url: fixtureURL(base, runId, "updated"), muted: true});

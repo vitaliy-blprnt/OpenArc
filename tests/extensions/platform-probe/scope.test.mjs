@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {prefix, fixtureURL, exampleURL, ownsURL, ownsBookmark, bookmarkCleanupOrder, validateLedger, ProbeError, Blocked, diagnosticMessage, validNativeReply} from "./scope.mjs";
 import {checkNativeHost} from "./native.mjs";
+import {pinRoundTrip, groupRoundTrip, removeOwnedTab} from "./tab-structure.mjs";
 
 const run = "c638f088-bfe0-4a18-a667-15b293258055";
 const other = "a638f088-bfe0-4a18-a667-15b293258055";
@@ -170,4 +171,135 @@ test("native post failure still removes listeners and disconnects", async () => 
     return true;
   });
   harness.closed();
+});
+
+function structureHarness() {
+  const context = {base, runId: run, windowId: 7, ids: [11, 12], recordedIds: [11, 12]};
+  let pages = context.ids.map((id, index) => ({id, windowId: 7, index, pinned: false,
+    groupId: -1, url: fixtureURL(base, run, String(index))}));
+  let group = null;
+  const mutations = [];
+  const reindex = () => pages.forEach((tab, index) => { tab.index = index; });
+  const tabs = {
+    async query(query) { return pages.filter((tab) => tab.windowId === query.windowId &&
+      (query.groupId === undefined || query.groupId === tab.groupId)).map((tab) => ({...tab})); },
+    async update(id, properties) {
+      mutations.push(["update", id]);
+      Object.assign(pages.find((tab) => tab.id === id), properties);
+      pages.sort((a, b) => Number(b.pinned) - Number(a.pinned)); reindex();
+    },
+    async move(id, properties) {
+      mutations.push(["move", id]);
+      const index = pages.findIndex((tab) => tab.id === id);
+      pages.splice(properties.index, 0, ...pages.splice(index, 1)); reindex();
+    },
+    async group(options) {
+      mutations.push(["group", ...options.tabIds]);
+      group = {id: 88, windowId: options.createProperties.windowId, color: "grey", collapsed: false, shared: false};
+      pages.forEach((tab) => { if (options.tabIds.includes(tab.id)) tab.groupId = group.id; });
+      return group.id;
+    },
+    async ungroup(ids) {
+      const selected = Array.isArray(ids) ? ids : [ids];
+      mutations.push(["ungroup", ...selected]);
+      pages.forEach((tab) => { if (selected.includes(tab.id)) tab.groupId = -1; });
+      if (!pages.some((tab) => tab.groupId >= 0)) group = null;
+    },
+    async remove(id) { mutations.push(["remove", id]); pages = pages.filter((tab) => tab.id !== id); reindex(); },
+  };
+  const groups = {
+    async get() { return {...group}; },
+    async update(id, properties) { mutations.push(["group-update", id]); Object.assign(group, properties); },
+    async query(query) { return group && group.windowId === query.windowId && group.title === query.title ? [{...group}] : []; },
+  };
+  const readOwned = async (id) => {
+    const tab = pages.find((item) => item.id === id);
+    if (!context.recordedIds.includes(id) || !tab || !ownsURL(tab.pendingUrl || tab.url, base, run)) {
+      throw new ProbeError("Fixture changed; preserved.");
+    }
+    return {...tab};
+  };
+  return {context, tabs, groups, mutations, pages: () => pages, readOwned};
+}
+
+test("pin and group round trips restore ordinary synthetic tabs without extra resources", async () => {
+  const harness = structureHarness();
+  await pinRoundTrip(harness.tabs, harness.context);
+  await groupRoundTrip(harness.tabs, harness.groups, harness.context);
+  assert.deepEqual(harness.pages().map(({id, index, pinned, groupId}) => ({id, index, pinned, groupId})), [
+    {id: 11, index: 0, pinned: false, groupId: -1}, {id: 12, index: 1, pinned: false, groupId: -1},
+  ]);
+  assert.deepEqual(harness.mutations.filter(([kind]) => kind === "group"), [["group", 11, 12]]);
+});
+
+test("structure checks refuse foreign tabs, changed destinations, moved tabs, and unjournaled IDs before mutation", async () => {
+  for (const mutate of [
+    (h) => h.pages().push({id: 99, windowId: 7, index: 2, url: "https://private.example/secret"}),
+    (h) => { h.pages()[0].pendingUrl = "https://private.example/secret"; },
+    (h) => { h.pages()[0].windowId = 9; },
+    (h) => { h.context.recordedIds = [11]; },
+    (h) => { h.pages()[0].groupId = 123; },
+  ]) {
+    for (const operation of [pinRoundTrip, (tabs, context) => groupRoundTrip(tabs, {}, context)]) {
+      const harness = structureHarness(); mutate(harness);
+      await assert.rejects(operation(harness.tabs, harness.context), (error) => {
+        assert.equal(diagnosticMessage(error).includes("private.example"), false);
+        return error instanceof ProbeError;
+      });
+      assert.deepEqual(harness.mutations, []);
+    }
+  }
+});
+
+test("pinning fails when the API sets pinned without preserving real pinned ordering", async () => {
+  const harness = structureHarness();
+  harness.tabs.update = async (id, properties) => Object.assign(harness.pages().find((tab) => tab.id === id), properties);
+  await assert.rejects(pinRoundTrip(harness.tabs, harness.context), /real pinned tab/);
+});
+
+test("a newly added foreign tab prevents synthetic group metadata mutation", async () => {
+  const harness = structureHarness();
+  const group = harness.tabs.group;
+  harness.tabs.group = async (options) => {
+    const id = await group(options);
+    harness.pages().push({id: 99, windowId: 7, index: 2, groupId: id, url: "https://private.example/secret"});
+    return id;
+  };
+  await assert.rejects(groupRoundTrip(harness.tabs, harness.groups, harness.context), /membership or page ownership changed/);
+  assert.deepEqual(harness.mutations, [["group", 11, 12]]);
+});
+
+test("interrupted grouping is cleaned using only journaled owned tab IDs", async () => {
+  const harness = structureHarness();
+  await harness.tabs.group({tabIds: harness.context.ids, createProperties: {windowId: 7}});
+  harness.mutations.length = 0;
+  for (const id of harness.context.recordedIds) await removeOwnedTab(harness.tabs, id, harness.readOwned);
+  assert.deepEqual(harness.mutations, [["ungroup", 11], ["remove", 11], ["ungroup", 12], ["remove", 12]]);
+  assert.equal(harness.pages().length, 0);
+});
+
+test("group recovery preserves an unrelated member and never mutates its group metadata", async () => {
+  const harness = structureHarness();
+  await harness.tabs.group({tabIds: harness.context.ids, createProperties: {windowId: 7}});
+  const foreign = {id: 99, windowId: 7, index: 2, groupId: 88, url: "https://private.example/secret"};
+  harness.pages().push(foreign);
+  harness.mutations.length = 0;
+  for (const id of harness.context.recordedIds) await removeOwnedTab(harness.tabs, id, harness.readOwned);
+  assert.deepEqual(harness.pages().map(({id, groupId, url}) => ({id, groupId, url})),
+    [{id: 99, groupId: 88, url: foreign.url}]);
+  assert.deepEqual(harness.mutations, [["ungroup", 11], ["remove", 11], ["ungroup", 12], ["remove", 12]]);
+});
+
+test("cleanup revalidates ownership after ungrouping before closing a tab", async () => {
+  const harness = structureHarness();
+  await harness.tabs.group({tabIds: harness.context.ids, createProperties: {windowId: 7}});
+  harness.mutations.length = 0;
+  const ungroup = harness.tabs.ungroup;
+  harness.tabs.ungroup = async (id) => {
+    await ungroup(id);
+    harness.pages().find((tab) => tab.id === id).pendingUrl = "https://private.example/secret";
+  };
+  await assert.rejects(removeOwnedTab(harness.tabs, 11, harness.readOwned), /Fixture changed/);
+  assert.deepEqual(harness.mutations, [["ungroup", 11]]);
+  assert.equal(harness.pages().length, 2);
 });
