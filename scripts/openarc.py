@@ -416,6 +416,20 @@ class Workflow:
         else:
             print("Empty patch series: unmodified Chromium baseline")
 
+    def unapply(self) -> None:
+        self.assert_pin(self.src, "chromium")
+        patches = self.patches()
+        state = self.patch_state(patches)
+        count = len(state["applied"])
+        for _, path, _ in reversed(patches[:count]):
+            self.run(["git", "-C", str(self.src), "apply", "--reverse", "--check", "--index", str(path)])
+            self.run(["git", "-C", str(self.src), "apply", "--reverse", "--index", str(path)])
+            state["applied"].pop()
+            state["tree_digest"] = self.tree_digest()
+            atomic_json(self.state_file, state)
+        self.assert_clean(self.src)
+        print(f"{count} recorded patches removed; source is pristine at the locked revision. Build evidence is unchanged.")
+
     def require_mac(self) -> None:
         if sys.platform != "darwin" or platform.machine() != "arm64":
             raise WorkflowError("Build and launch currently require an Apple Silicon Mac")
@@ -605,7 +619,7 @@ class Workflow:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("doctor", "fetch", "bootstrap", "sync", "apply"):
+    for name in ("doctor", "fetch", "bootstrap", "sync", "apply", "unapply"):
         commands.add_parser(name)
     check = commands.add_parser("check")
     check.add_argument("--checkout", action="store_true", help="Also validate the existing checkout and recorded patch state")

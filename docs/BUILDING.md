@@ -119,6 +119,24 @@ to restore a baseline. Its seed remains bound to the original lock/dependencies;
 an upstream change requires a separately reviewed output transition. These
 receipts establish compilation provenance, not runtime or release qualification.
 
+### Remove the recorded patch overlay
+
+For planned maintenance, after stopping builds and closing browsers using the
+checkout, run `python3 scripts/openarc.py unapply`. It validates the current pin,
+patch hashes and recorded source state, then reverses only the applied prefix in
+reverse order, checkpointing each successful removal. Unknown edits/files are
+preserved and block the operation; failures retain the remaining recorded prefix
+for review or retry. It never resets, cleans, or stashes the checkout. Repeating
+the command when no patches remain is harmless.
+
+Build receipts and historical promotion evidence remain intact; removing patches
+does not authorize launching mismatched binaries or restore a promoted baseline.
+The matching empty patch state is retained for reapplication at the same pin.
+Before changing the pin, explicitly review and archive that old state along with
+the maintenance evidence. Pin changes, dependency updates, output ownership and
+rebuild qualification require a separate reviewed transition; `unapply` performs
+none of those steps automatically.
+
 Pinning depot_tools disables automatic updates, including its implicit bootstrap.
 The workflow explicitly invokes the pinned `ensure_bootstrap` script and checks
 that its Python launcher works. To repair an already fetched checkout independently

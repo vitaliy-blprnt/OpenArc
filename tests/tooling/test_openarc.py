@@ -235,6 +235,104 @@ class WorkflowTests(unittest.TestCase):
             workflow.apply()
         self.assertEqual((repo / "example.txt").read_text(), "first\n")
 
+    def test_unapply_reverses_overlapping_stack_and_repeat_is_harmless(self):
+        repo = self.repository()
+        before = (repo / "example.txt").read_bytes()
+        self.add_patch("01.patch", "base", "first")
+        self.add_patch("02.patch", "first", "second")
+        workflow = self.workflow()
+        workflow.apply()
+        workflow.unapply()
+        self.assertEqual((repo / "example.txt").read_bytes(), before)
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        state_bytes = workflow.state_file.read_bytes()
+        self.assertEqual(json.loads(state_bytes)["applied"], [])
+        workflow.unapply()
+        self.assertEqual(workflow.state_file.read_bytes(), state_bytes)
+        workflow.apply()
+        self.assertEqual((repo / "example.txt").read_text(), "second\n")
+
+    def test_unapply_removes_only_applied_prefix_after_failed_application(self):
+        repo = self.repository()
+        self.add_patch("01.patch", "base", "first")
+        self.add_patch("02.patch", "different", "second")
+        workflow = self.workflow()
+        with self.assertRaises(openarc.WorkflowError):
+            workflow.apply()
+        workflow.unapply()
+        self.assertEqual((repo / "example.txt").read_text(), "base\n")
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+        self.assertEqual(json.loads(workflow.state_file.read_text())["applied"], [])
+
+    def test_unapply_preserves_unknown_staged_unstaged_and_untracked_work(self):
+        repo = self.repository()
+        self.add_patch("01.patch", "base", "first")
+        workflow = self.workflow()
+        workflow.apply()
+        (repo / "example.txt").write_text("valuable staged edit\n")
+        git(repo, "add", "example.txt")
+        (repo / "example.txt").write_text("valuable unstaged edit\n")
+        (repo / "notes.txt").write_text("valuable untracked file\n")
+        state = workflow.state_file.read_bytes()
+        staged = git(repo, "diff", "--cached")
+        with self.assertRaisesRegex(openarc.WorkflowError, "preserving local work"):
+            workflow.unapply()
+        self.assertEqual((repo / "example.txt").read_text(), "valuable unstaged edit\n")
+        self.assertEqual((repo / "notes.txt").read_text(), "valuable untracked file\n")
+        self.assertEqual(git(repo, "diff", "--cached"), staged)
+        self.assertEqual(workflow.state_file.read_bytes(), state)
+
+    def test_unapply_rejects_changed_patch_digest_and_pin(self):
+        repo = self.repository()
+        path = self.add_patch("01.patch", "base", "first")
+        workflow = self.workflow()
+        workflow.apply()
+        path.write_text(path.read_text() + "\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "does not match"):
+            workflow.unapply()
+        self.lock["chromium"]["revision"] = "f" * 40
+        self.write_lock()
+        with self.assertRaisesRegex(openarc.WorkflowError, "not at the locked commit"):
+            self.workflow().unapply()
+        self.assertEqual((repo / "example.txt").read_text(), "first\n")
+
+    def test_unapply_failure_checkpoints_remaining_prefix_and_can_retry(self):
+        repo = self.repository()
+        first = self.add_patch("01.patch", "base", "first")
+        self.add_patch("02.patch", "first", "second")
+        workflow = self.workflow()
+        workflow.apply()
+        real_run = workflow.run
+
+        def fail_later_reverse(args, **kwargs):
+            if "--reverse" in args and "--check" not in args and args[-1] == str(first):
+                raise openarc.WorkflowError("simulated reverse application failure")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "run", side_effect=fail_later_reverse):
+            with self.assertRaisesRegex(openarc.WorkflowError, "simulated reverse application failure"):
+                workflow.unapply()
+        self.assertEqual((repo / "example.txt").read_text(), "first\n")
+        state = workflow.patch_state(workflow.patches())
+        self.assertEqual([item["name"] for item in state["applied"]], ["01.patch"])
+        self.workflow().unapply()
+        self.assertEqual((repo / "example.txt").read_text(), "base\n")
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+
+    def test_unapply_preserves_evidence_and_cannot_reauthorize_promoted_baseline(self):
+        workflow, _ = self.baseline_for_promotion()
+        self.executable(workflow, "OpenArc", workflow.baseline_output)
+        self.simulated_build(workflow, reuse_baseline=True)
+        receipt = workflow.build_receipt_path(False).read_bytes()
+        promotion = workflow.promotion_file.read_bytes()
+        workflow.unapply()
+        self.assertEqual(workflow.build_receipt_path(False).read_bytes(), receipt)
+        self.assertEqual(workflow.promotion_file.read_bytes(), promotion)
+        with self.assertRaisesRegex(openarc.WorkflowError, "not fully applied"):
+            workflow.launch_command()
+        with self.assertRaisesRegex(openarc.WorkflowError, "promoted"):
+            workflow.launch_command(baseline=True)
+
     def test_patch_series_cannot_read_outside_patch_directory(self):
         for value in ("../outside.patch", "/tmp/outside.patch", "01.patch\n01.patch"):
             self.series.write_text(value + "\n")

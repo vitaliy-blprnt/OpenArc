@@ -34,7 +34,7 @@ does not promise this revision remains current after this checkpoint.
 | Host/toolchain preflight | Passed for attempting a development build |
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
 | Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
-| Tooling test suite | 67 tests passed locally, including build provenance, baseline output reuse, dependency inventory/bootstrap, isolated native-host safeguards, and read-only upstream checks |
+| Tooling test suite | 73 tests passed locally, including build provenance, baseline output reuse, interruption-safe patch reversal, dependency inventory/bootstrap, isolated native-host safeguards, and read-only upstream checks |
 | Extension fixture scope guards | 21 Node tests passed; includes browser timer receiver binding, pin/group checks, and interrupted group cleanup guards |
 | Native model preparation | 24 C++ tests passed for association reconciliation and the bounded tab-session codec after standalone compilation with the pinned Chromium Clang, headers, libbase, and libc++; the documented recipe was executed. GN/browser integration has not been run |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
