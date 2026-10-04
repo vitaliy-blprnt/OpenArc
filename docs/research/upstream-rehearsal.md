@@ -6,19 +6,20 @@ The official Git tag **155.0.8059.26** resolves to **`16c3e55476d3564bea713314b2
 
 ## Patch results
 
-After extending the no-AI patch on 4 October, downloaded all seventeen files affected by the current patch series afresh from the exact candidate revision into a new isolated, ignored snapshot repository. All three patches passed sequential `git apply --check --index` and application:
+After adding the automated password-change gate on 4 October, downloaded all twenty-three files affected by the current four-patch series afresh from the exact candidate revision into a new isolated, ignored snapshot repository. All four patches passed sequential `git apply --check --index` and application:
 
 | Patch | Result |
 | --- | --- |
 | `0001-openarc-identity.patch` | Applied without conflict |
 | `0002-openarc-vertical-tabs.patch` | Applied without conflict |
 | `0003-openarc-no-ai-defaults.patch` | Applied without conflict |
+| `0004-openarc-disable-automated-password-change.patch` | Applied without conflict |
 
-The resulting indexed diff passed `git diff --cached --check`. Reversing the patches in reverse order restored every downloaded file's original SHA-256 and left the snapshot's Git status empty. Hashes of `upstream.lock` and the seventeen corresponding files in the active checkout remained unchanged.
+The resulting indexed diff passed `git diff --cached --check`. Reversing the patches in reverse order restored every downloaded file's original SHA-256 and left the snapshot's Git status empty. Hashes of `upstream.lock` and the twenty-three corresponding files in the active checkout remained unchanged.
 
-Current ordered apply/reverse evidence is `.build/no-ai-audit-validation/evidence.json`, with exact source URLs, source/patched hashes, commands and separate pinned-154/candidate-155 snapshots. The current no-AI patch SHA-256 is `b90f0d6e8536cd4ba6f3a10df1cec757caf712d043f922d3ae3942ab0d620466`. Checks also covered ten disabled feature definitions, the Autofill AI Settings producer/consumer binding, ordinary Autofill card markers, attribution, and plist/GRIT parsing. These are static source checks, not TypeScript or C++ compilation.
+Current ordered apply/reverse evidence is `.build/password-change-gate/validation/evidence.json`, with exact source URLs, source/patched hashes, commands and separate pinned-154/candidate-155 snapshots. The current no-AI patch SHA-256 is `b90f0d6e8536cd4ba6f3a10df1cec757caf712d043f922d3ae3942ab0d620466`. The new automated password-change patch SHA-256 is `dc9c2598911cb7b1261dfebd6a891fb600171101c5d0613e9bd17103ceb57db6`. Checks also covered eleven disabled feature definitions, the Autofill AI Settings producer/consumer binding, ordinary Autofill card markers, attribution, and plist/GRIT parsing. The new UMA value 15 preserves obsolete value 5. These candidate checks are static source checks, not candidate TypeScript or C++ compilation. Separate standalone compilation of the new feature/service/test translation units used pinned Chromium 154 headers only; no unit tests were executed.
 
-The earlier `.build/upstream-rehearsal-155.0.8059.26-7iwxbrfk/evidence.json` remains the source for tag resolution and the SDK/vertical-tab comparisons below; its eleven-file patch result covers an older patch hash and is superseded by the seventeen-file validation. All directories are ignored local evidence, not published build artifacts.
+The earlier `.build/upstream-rehearsal-155.0.8059.26-7iwxbrfk/evidence.json` remains the source for tag resolution and the SDK/vertical-tab comparisons below; its eleven-file patch result covers an older patch hash and is superseded by the twenty-three-file validation. The intermediate seventeen-file `.build/no-ai-audit-validation/evidence.json` still covers patches 0001–0003 only; it does not cover patch 0004. All directories are ignored local evidence, not published build artifacts.
 
 ## Source-seam comparison
 
