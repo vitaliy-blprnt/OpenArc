@@ -75,7 +75,7 @@ diff --git a/components/omnibox/browser/aim_eligibility_service_features.cc b/co
 index c23cef8..254308e 100644
 --- a/components/omnibox/browser/aim_eligibility_service_features.cc
 +++ b/components/omnibox/browser/aim_eligibility_service_features.cc
-@@ -8,7 +8,7 @@
+@@ -8,6 +8,6 @@
  
  namespace omnibox {
  
@@ -83,4 +83,3 @@ index c23cef8..254308e 100644
 +BASE_FEATURE(kAimEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
  
  BASE_FEATURE(kAimServerEligibilityEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
- 
