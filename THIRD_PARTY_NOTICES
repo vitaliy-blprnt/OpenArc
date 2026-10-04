@@ -1,0 +1,84 @@
+# Third-party notices
+
+## Scope
+
+The root LICENSE applies to original OpenArc work. It uses the BSD-3-Clause
+license text published by the Open Source Initiative:
+https://opensource.org/license/bsd-3-clause
+
+Chromium and its dependencies keep their own licenses. OpenArc's license does
+not replace notices in upstream files, patch context, dependencies, or generated
+artifacts. Upstream source is fetched separately using the pinned build inputs.
+Preserve the license files in that source tree.
+
+This is an initial source-repository attribution inventory. It is not a complete
+notice bundle for a browser binary, and it does not assert that every fetched or
+transitive dependency has been audited. No qualified release binary is supplied
+by this initial scaffold. Before distributing a binary, assemble and verify
+notices for the exact source revision, build configuration, resources, and
+libraries actually included; see docs/RELEASING.md.
+
+## Chromium
+
+Project: https://www.chromium.org/
+Source: https://chromium.googlesource.com/chromium/src/
+Root license reference:
+https://chromium.googlesource.com/chromium/src/+/main/LICENSE
+
+The text below reproduces Chromium's root license. The LICENSE and component
+license files at the exact locked revision remain authoritative for that build.
+
+Copyright 2015 The Chromium Authors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+* Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above
+  copyright notice, this list of conditions and the following disclaimer
+  in the documentation and/or other materials provided with the
+  distribution.
+* Neither the name of Google LLC nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Chromium third-party code and build tools
+
+Chromium's dependency graph includes components with separate licensing terms.
+Its DEPS, third_party component metadata, LICENSE files, generated credits, and
+build-time license tools must be evaluated at the pinned revision. Do not treat
+the root Chromium BSD notice as the license for all Chromium dependencies.
+
+depot_tools is obtained from:
+https://chromium.googlesource.com/chromium/tools/depot_tools.git
+Its own LICENSE and dependency notices apply; it is a build tool, not an OpenArc
+authored component. A browser distribution must distinguish shipped code from
+tools used only during the build.
+
+## Design references and marks
+
+Arc documentation and published screenshots are linked as research references.
+This repository does not grant rights to Arc's source code, logos, icons, or other
+assets. OpenArc is an independent project and is not affiliated with The Browser
+Company, Google, or the Chromium project. Google Chrome branding is not licensed
+by Chromium's open-source license. Create and use original OpenArc branding.
+
+## Contributions
+
+When adding third-party material, record its origin, exact version or revision,
+license, local notice location, and whether it ships in the application. Preserve
+required notices and update the release inventory before publishing artifacts.

@@ -1,0 +1,454 @@
+#!/usr/bin/env python3
+"""Pinned, non-destructive Chromium development workflow. Python standard library only."""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+from typing import Any
+from urllib.parse import urlparse
+
+
+CHROMIUM_URL = "https://chromium.googlesource.com/chromium/src.git"
+DEPOT_URL = "https://chromium.googlesource.com/chromium/tools/depot_tools.git"
+SHA = re.compile(r"[0-9a-f]{40}\Z")
+GN_NAME = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\Z")
+GIB = 1024**3
+
+
+class WorkflowError(Exception):
+    """An actionable failure that must not discard local work."""
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def atomic_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A unique temporary file avoids overwriting a user's stale .tmp file or
+    # following a pre-existing temporary-file symlink.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                     prefix=path.name + ".", suffix=".tmp", delete=False) as file:
+        temporary = Path(file.name)
+        try:
+            file.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def relative_path(value: Any, label: str) -> Path:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise WorkflowError(f"{label} must be a nonempty relative POSIX path")
+    path = Path(value)
+    if path.is_absolute() or any(part in (".", "..") for part in value.split("/")):
+        raise WorkflowError(f"{label} must not be absolute or contain . or ..")
+    return path
+
+
+def gn_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str) and "\n" not in value and "\r" not in value:
+        # GN uses $ for expansion, including inside quoted strings.
+        return json.dumps(value).replace("$", "\\$")
+    if isinstance(value, list):
+        return "[" + ", ".join(gn_value(item) for item in value) + "]"
+    raise WorkflowError(f"Unsupported GN argument value: {value!r}")
+
+
+class Workflow:
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+        self.work = self.safe_path(self.root / ".build")
+        self.depot = self.safe_path(self.work / "depot_tools")
+        self.checkout = self.safe_path(self.work / "chromium")
+        self.src = self.safe_path(self.checkout / "src")
+        self.state_file = self.safe_path(self.work / "patch-state.json")
+        try:
+            self.lock = json.loads((self.root / "upstream.lock").read_text())
+        except (OSError, ValueError) as exc:
+            raise WorkflowError(f"Cannot read upstream.lock: {exc}") from exc
+        self.validate_lock()
+        self.output = self.safe_path(self.src / self.lock["build"]["output_dir"])
+        self.baseline_output = self.safe_path(self.src / "out" / "Baseline")
+        self.env = os.environ.copy()
+        self.env["PATH"] = str(self.depot) + os.pathsep + self.env.get("PATH", "")
+        self.env["DEPOT_TOOLS_UPDATE"] = "0"
+        self.env["DEPOT_TOOLS_METRICS"] = "0"
+
+    def safe_path(self, path: Path) -> Path:
+        """Refuse paths escaping the project or redirected through symlinks."""
+        try:
+            parts = path.relative_to(self.root).parts
+        except ValueError as exc:
+            raise WorkflowError(f"Path is outside the project: {path}") from exc
+        current = self.root
+        for part in parts:
+            current /= part
+            if current.is_symlink():
+                raise WorkflowError(f"Refusing symlink in managed path: {current}")
+        if not path.resolve().is_relative_to(self.root):
+            raise WorkflowError(f"Path escapes the project: {path}")
+        return path
+
+    def validate_lock(self) -> None:
+        lock = self.lock
+        if not isinstance(lock, dict) or lock.get("schema_version") != 1:
+            raise WorkflowError("upstream.lock must use schema_version 1")
+        for name, url in (("chromium", CHROMIUM_URL), ("depot_tools", DEPOT_URL)):
+            item = lock.get(name)
+            if not isinstance(item, dict) or item.get("repository") != url:
+                raise WorkflowError(f"{name}.repository must be {url}")
+            if not isinstance(item.get("revision"), str) or not SHA.fullmatch(item["revision"]):
+                raise WorkflowError(f"{name}.revision must be an exact 40-character lowercase commit SHA")
+        build = lock.get("build")
+        if not isinstance(build, dict) or build.get("target_os") != "mac" or build.get("target_cpu") != "arm64":
+            raise WorkflowError("This workflow currently supports target_os mac and target_cpu arm64")
+        output = relative_path(build.get("output_dir"), "build.output_dir")
+        if len(output.parts) != 2 or output.parts[0] != "out":
+            raise WorkflowError("build.output_dir must be a direct child of out/, e.g. out/OpenArc")
+        args = build.get("gn_args")
+        if not isinstance(args, dict) or args.get("target_cpu") != "arm64":
+            raise WorkflowError("build.gn_args must include target_cpu: arm64")
+        if args.get("use_sandbox") is False or args.get("is_chrome_branded") is True:
+            raise WorkflowError("Sandbox disabling and Google Chrome branding are not supported")
+        for name, value in args.items():
+            if not GN_NAME.fullmatch(name):
+                raise WorkflowError(f"Invalid GN argument name: {name}")
+            gn_value(value)
+
+    def run(self, args: list[str], cwd: Path | None = None, *, capture: bool = False,
+            check: bool = True) -> subprocess.CompletedProcess:
+        if not capture:
+            print("+ " + shlex.join(str(arg) for arg in args), flush=True)
+        try:
+            result = subprocess.run(args, cwd=cwd or self.root, env=self.env,
+                                    text=True, capture_output=capture, check=False)
+        except OSError as exc:
+            raise WorkflowError(f"Cannot execute {args[0]}: {exc}") from exc
+        if check and result.returncode:
+            detail = (result.stderr or result.stdout or "").strip()[-4000:]
+            raise WorkflowError(f"Command failed ({result.returncode}): {shlex.join(args)}\n{detail}")
+        return result
+
+    def git(self, repo: Path, *args: str, check: bool = True) -> str:
+        return self.run(["git", "-C", str(repo), *args], capture=True, check=check).stdout.strip()
+
+    def revision(self, repo: Path) -> str:
+        return self.git(repo, "rev-parse", "HEAD")
+
+    def assert_pin(self, repo: Path, component: str) -> None:
+        self.safe_path(repo)
+        if self.revision(repo) != self.lock[component]["revision"]:
+            raise WorkflowError(f"{component} checkout is not at the locked commit; use fetch before continuing")
+
+    def status(self, repo: Path) -> str:
+        return self.git(repo, "status", "--porcelain", "--untracked-files=normal")
+
+    def assert_clean(self, repo: Path) -> None:
+        status = self.status(repo)
+        if status:
+            raise WorkflowError(f"Preserving modified checkout {repo}; commit/stash or resolve changes manually:\n{status[:3000]}")
+
+    def ensure_space(self, minimum_gib: int) -> None:
+        free = shutil.disk_usage(self.root).free
+        if free < minimum_gib * GIB:
+            raise WorkflowError(f"Only {free / GIB:.1f} GiB free; this operation requires at least {minimum_gib} GiB headroom. No files were removed.")
+
+    def doctor(self) -> int:
+        tools = {name: shutil.which(name, path=self.env["PATH"])
+                 for name in ("git", "python3", "xcodebuild", "xcrun", "gn", "gclient", "autoninja")}
+        problems = []
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            problems.append("Build/launch require an Apple Silicon Mac")
+        for name in ("git", "python3", "xcodebuild", "xcrun"):
+            if not tools[name]:
+                problems.append(f"Missing {name}")
+        sdk = None
+        required_sdk = None
+        if tools["xcrun"]:
+            result = self.run(["xcrun", "--sdk", "macosx", "--show-sdk-version"], capture=True, check=False)
+            sdk = result.stdout.strip()
+            if result.returncode:
+                problems.append("xcrun cannot locate the macOS SDK")
+        sdk_config = self.safe_path(self.src / "build/config/mac/mac_sdk.gni")
+        if sdk_config.is_file():
+            match = re.search(r'mac_sdk_official_version\s*=\s*"([^"\n]+)"', sdk_config.read_text())
+            if match:
+                required_sdk = match.group(1)
+        free = round(shutil.disk_usage(self.root).free / GIB, 1)
+        if free < 40:
+            problems.append("Less than 40 GiB free build headroom")
+        print(json.dumps({"platform": sys.platform, "machine": platform.machine(), "python": platform.python_version(),
+                          "sdk": sdk, "upstream_official_sdk": required_sdk, "free_gib": free, "tools": tools,
+                          "chromium_revision": self.lock["chromium"]["revision"],
+                          "checkout": str(self.src), "problems": problems}, indent=2))
+        print("depot_tools commands become available after fetch. SDK compatibility is determined by the pinned Chromium ref.")
+        if sdk and required_sdk and sdk != required_sdk:
+            print(f"Warning: installed SDK {sdk} differs from upstream official SDK {required_sdk}; development compatibility needs a real build.")
+        return 1 if problems else 0
+
+    def checkout_repo(self, path: Path, component: str) -> None:
+        self.safe_path(path)
+        spec = self.lock[component]
+        if path.exists() and not (path / ".git").exists():
+            if any(path.iterdir()):
+                raise WorkflowError(f"Refusing non-repository, nonempty destination: {path}")
+        path.mkdir(parents=True, exist_ok=True)
+        if not (path / ".git").exists():
+            self.run(["git", "init", str(path)])
+            self.run(["git", "-C", str(path), "remote", "add", "origin", spec["repository"]])
+        if self.git(path, "remote", "get-url", "origin") != spec["repository"]:
+            raise WorkflowError(f"Unexpected origin in {path}; refusing to replace it")
+        self.assert_clean(path)
+        existing = self.run(["git", "-C", str(path), "rev-parse", "--verify", "HEAD"], capture=True, check=False)
+        if existing.returncode == 0 and existing.stdout.strip() == spec["revision"]:
+            print(f"{component}: already at locked commit")
+            return
+        self.run(["git", "-C", str(path), "fetch", "--depth=1", "origin", spec["revision"]])
+        self.run(["git", "-C", str(path), "checkout", "--detach", spec["revision"]])
+        self.assert_pin(path, component)
+
+    def fetch(self) -> None:
+        self.ensure_space(20)
+        # Check BOTH existing trees before mutating either one.
+        for path in (self.depot, self.src):
+            if (path / ".git").exists():
+                self.assert_clean(path)
+        self.checkout_repo(self.depot, "depot_tools")
+        self.checkout_repo(self.src, "chromium")
+        print("Pinned source checkouts ready. Run sync to fetch dependencies and run hooks.")
+
+    def dependency_repos(self) -> list[Path]:
+        entries = self.safe_path(self.checkout / ".gclient_entries")
+        if not entries.exists():
+            return []
+        try:
+            tree = ast.parse(entries.read_text())
+            value = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                         and any(isinstance(target, ast.Name) and target.id == "entries" for target in node.targets))
+            mapping = ast.literal_eval(value)
+            if not isinstance(mapping, dict):
+                raise ValueError("entries must be a dictionary")
+        except (OSError, ValueError, SyntaxError, StopIteration) as exc:
+            raise WorkflowError(f"Cannot safely inspect .gclient_entries: {exc}") from exc
+        repos = []
+        for name in mapping:
+            path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
+            if (path / ".git").exists() and path != self.src:
+                repos.append(path)
+        return repos
+
+    def sync(self) -> None:
+        self.ensure_space(40)
+        self.assert_pin(self.depot, "depot_tools")
+        self.assert_pin(self.src, "chromium")
+        for repo in [self.depot, self.src, *self.dependency_repos()]:
+            self.assert_clean(repo)
+        configuration = ("solutions = " + repr([{"name": "src", "url": CHROMIUM_URL,
+                         "managed": False, "custom_deps": {}, "custom_vars": {
+                             "checkout_pgo_profiles": self.lock["build"]["gn_args"].get("chrome_pgo_phase", 0) != 0}}])
+                         + "\ntarget_os = ['mac']\n")
+        config_path = self.safe_path(self.checkout / ".gclient")
+        if config_path.exists() and config_path.read_text() != configuration:
+            raise WorkflowError(f"Existing {config_path} differs from locked configuration; preserving it for manual review")
+        config_path.write_text(configuration)
+        self.run([str(self.depot / "gclient"), "sync", "--no-history", "--revision",
+                  "src@" + self.lock["chromium"]["revision"]], cwd=self.checkout)
+        self.assert_pin(self.src, "chromium")
+
+    def patches(self) -> list[tuple[str, Path, str]]:
+        directory = self.safe_path(self.root / "patches" / "chromium")
+        series = self.safe_path(directory / "series")
+        if not series.is_file():
+            raise WorkflowError("Missing patches/chromium/series (an empty file is valid for the baseline)")
+        result = []
+        seen = set()
+        for line in series.read_text().splitlines():
+            name = line.strip()
+            if not name or name.startswith("#"):
+                continue
+            relative = relative_path(name, "patch name")
+            if relative.suffix != ".patch" or name in seen:
+                raise WorkflowError(f"Patch names must be unique .patch paths: {name}")
+            seen.add(name)
+            path = self.safe_path(directory / relative)
+            if not path.is_file():
+                raise WorkflowError(f"Missing patch: {path}")
+            result.append((name, path, digest(path.read_bytes())))
+        return result
+
+    def tree_digest(self) -> str:
+        # --index patch application puts all new files in the index. Include both
+        # staged and unstaged changes relative to HEAD; untracked files are separate.
+        value = self.run(["git", "-C", str(self.src), "diff", "--binary", "HEAD"], capture=True).stdout
+        return digest(value.encode())
+
+    def patch_state(self, patches: list[tuple[str, Path, str]]) -> dict:
+        if not self.state_file.exists():
+            self.assert_clean(self.src)
+            return {"revision": self.lock["chromium"]["revision"], "applied": [], "tree_digest": self.tree_digest()}
+        try:
+            state = json.loads(self.state_file.read_text())
+            expected = [{"name": name, "sha256": sha} for name, _, sha in patches]
+            applied = state["applied"]
+            if (state["revision"] != self.lock["chromium"]["revision"]
+                    or not isinstance(applied, list) or applied != expected[:len(applied)]
+                    or len(applied) > len(expected)):
+                raise WorkflowError("Applied patch state does not match the lock/series; preserve and reconcile the checkout manually")
+            untracked = self.git(self.src, "ls-files", "--others", "--exclude-standard")
+            unstaged = self.git(self.src, "diff", "--name-only")
+            if untracked or unstaged or state["tree_digest"] != self.tree_digest():
+                raise WorkflowError("Checkout changed outside the recorded patch application; preserving local work")
+            return state
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise WorkflowError(f"Invalid patch state; preserving checkout: {exc}") from exc
+
+    def apply(self) -> None:
+        self.assert_pin(self.src, "chromium")
+        patches = self.patches()
+        state = self.patch_state(patches)
+        for name, path, sha in patches[len(state["applied"]):]:
+            self.run(["git", "-C", str(self.src), "apply", "--check", "--index", str(path)])
+            self.run(["git", "-C", str(self.src), "apply", "--index", str(path)])
+            state["applied"].append({"name": name, "sha256": sha})
+            state["tree_digest"] = self.tree_digest()
+            atomic_json(self.state_file, state)
+        if patches:
+            print(f"{len(patches)} patches applied and verified; no duplicate application")
+        else:
+            print("Empty patch series: unmodified Chromium baseline")
+
+    def require_mac(self) -> None:
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            raise WorkflowError("Build and launch currently require an Apple Silicon Mac")
+
+    def build(self, jobs: int, baseline: bool = False) -> None:
+        self.require_mac()
+        if not 1 <= jobs <= 64:
+            raise WorkflowError("--jobs must be between 1 and 64")
+        self.ensure_space(40)
+        self.assert_pin(self.depot, "depot_tools")
+        self.assert_pin(self.src, "chromium")
+        self.assert_clean(self.depot)
+        if baseline:
+            self.assert_clean(self.src)
+        else:
+            patches = self.patches()
+            state = self.patch_state(patches)
+            if len(state["applied"]) != len(patches):
+                raise WorkflowError("Patch series is not fully applied; run apply before build, or use --baseline for clean upstream")
+        output = self.baseline_output if baseline else self.output
+        output_relative = str(output.relative_to(self.src))
+        args = "\n".join(f"{name} = {gn_value(value)}" for name, value in sorted(self.lock["build"]["gn_args"].items()))
+        self.run([str(self.depot / "gn"), "gen", output_relative, "--args=" + args], cwd=self.src)
+        self.run([str(self.depot / "autoninja"), "-C", output_relative, "-j", str(jobs), "chrome"], cwd=self.src)
+        atomic_json(self.safe_path(self.work / ("baseline-build-info.json" if baseline else "build-info.json")), {
+            "upstream": self.lock, "checkout_diff_sha256": self.tree_digest(), "jobs": jobs,
+            "baseline": baseline, "output": output_relative,
+            "qualification": "Compilation succeeded; runtime, extensions, signing and release qualification remain separate."})
+        print(f"Build completed: {output}")
+
+    def executable(self, baseline: bool = False) -> Path:
+        output = self.baseline_output if baseline else self.output
+        candidates = [self.safe_path(output / (name + ".app") / "Contents" / "MacOS" / name)
+                      for name in ("OpenArc", "Chromium")]
+        found = [path for path in candidates if path.is_file() and os.access(path, os.X_OK)]
+        if len(found) != 1:
+            raise WorkflowError("Expected exactly one executable OpenArc.app or Chromium.app in the locked output directory; found "
+                                + str(len(found)) + ". Preserve/review stale build outputs manually.")
+        return found[0]
+
+    def launch_command(self, url: str | None = None, baseline: bool = False) -> list[str]:
+        self.assert_pin(self.src, "chromium")
+        profile = self.safe_path(self.work / "profiles" / ("baseline" if baseline else "development"))
+        profile.mkdir(parents=True, exist_ok=True)
+        args = [str(self.executable(baseline)), "--user-data-dir=" + str(profile), "--no-first-run", "--no-default-browser-check"]
+        if url:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise WorkflowError("Launch URL must be an explicit http:// or https:// URL")
+            args.append(url)
+        return args
+
+    def launch(self, url: str | None, baseline: bool = False) -> None:
+        self.require_mac()
+        args = self.launch_command(url, baseline)
+        log_path = self.safe_path(self.work / "logs" / ("baseline-launch.log" if baseline else "launch.log"))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("ab") as log:
+            child = subprocess.Popen(args, cwd=self.src, env=self.env, stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        print(json.dumps({"pid": child.pid, "command": args, "log": str(log_path),
+                          "qualification": "Process started; visible UI and browsing have not been verified by this command."}, indent=2))
+
+    def check(self, checkout: bool = False) -> None:
+        patches = self.patches()
+        for _, path, _ in patches:
+            self.run(["git", "apply", "--numstat", str(path)], capture=True)
+        details = {"lock": "valid", "patch_count": len(patches), "checkout": "not inspected (use --checkout)"}
+        if checkout:
+            self.assert_pin(self.src, "chromium")
+            state = self.patch_state(patches)
+            details["checkout"] = "locked revision; " + str(len(state["applied"])) + " recorded patches verified"
+        print(json.dumps(details, indent=2))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("doctor", "fetch", "sync", "apply"):
+        commands.add_parser(name)
+    check = commands.add_parser("check")
+    check.add_argument("--checkout", action="store_true", help="Also validate the existing checkout and recorded patch state")
+    build = commands.add_parser("build")
+    build.add_argument("--jobs", type=int, default=8, help="Compiler concurrency (default: 8)")
+    build.add_argument("--baseline", action="store_true", help="Build clean upstream in out/Baseline without applying project patches")
+    launch = commands.add_parser("launch")
+    launch.add_argument("url", nargs="?", help="Optional explicit HTTP(S) URL")
+    launch.add_argument("--baseline", action="store_true", help="Launch out/Baseline with a separate baseline profile")
+    args = parser.parse_args(argv)
+    try:
+        workflow = Workflow(Path(__file__).resolve().parent.parent)
+        if args.command == "build":
+            workflow.build(args.jobs, args.baseline)
+        elif args.command == "launch":
+            workflow.launch(args.url, args.baseline)
+        elif args.command == "check":
+            workflow.check(args.checkout)
+        else:
+            result = getattr(workflow, args.command)()
+            if isinstance(result, int):
+                return result
+        return 0
+    except (WorkflowError, OSError) as exc:
+        print(f"openarc: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("openarc: interrupted; existing source and partial downloads preserved", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

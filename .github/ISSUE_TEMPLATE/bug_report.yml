@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible OpenArc or build-tooling problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, follow SECURITY.md instead of this public form.
+        Remove secrets, private URLs, browsing history, and personal filesystem paths from evidence.
+  - type: input
+    id: revision
+    attributes:
+      label: OpenArc commit or release
+      placeholder: Commit SHA, tag, or unknown
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: macOS version and CPU architecture
+      placeholder: macOS version; Apple Silicon or Intel
+    validations:
+      required: true
+  - type: input
+    id: chromium
+    attributes:
+      label: Chromium revision and build type
+      description: Include the locked revision and whether this is source tooling, a local browser build, or a signed installation. Say "not built" when applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Use a clean development profile and synthetic data where possible. State whether this reproduces without extensions.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Relevant redacted logs, screenshot, or minimal fixture. Do not attach browser profile folders or authentication data.

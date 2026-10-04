@@ -1,0 +1,106 @@
+diff --git a/chrome/app/theme/chromium/BRANDING b/chrome/app/theme/chromium/BRANDING
+--- a/chrome/app/theme/chromium/BRANDING
++++ b/chrome/app/theme/chromium/BRANDING
+@@ -1,10 +1,10 @@
+ COMPANY_FULLNAME=The Chromium Authors
+ COMPANY_SHORTNAME=The Chromium Authors
+-PRODUCT_FULLNAME=Chromium
+-PRODUCT_SHORTNAME=Chromium
+-PRODUCT_INSTALLER_FULLNAME=Chromium Installer
+-PRODUCT_INSTALLER_SHORTNAME=Chromium Installer
++PRODUCT_FULLNAME=OpenArc
++PRODUCT_SHORTNAME=OpenArc
++PRODUCT_INSTALLER_FULLNAME=OpenArc Installer
++PRODUCT_INSTALLER_SHORTNAME=OpenArc Installer
+ COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Chromium Authors. All rights reserved.
+-MAC_BUNDLE_ID=org.chromium.Chromium
+-MAC_CREATOR_CODE=Cr24
++MAC_BUNDLE_ID=org.openarc.browser
++MAC_CREATOR_CODE=OpAr
+ MAC_TEAM_ID=
+diff --git a/chrome/app/app-Info.plist b/chrome/app/app-Info.plist
+--- a/chrome/app/app-Info.plist
++++ b/chrome/app/app-Info.plist
+@@ -155,6 +155,8 @@
+ 	<string>${CHROMIUM_BUNDLE_ID}</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
++	<key>CrProductDirName</key>
++	<string>OpenArc</string>
+ 	<key>CFBundleName</key>
+ 	<string>${CHROMIUM_SHORT_NAME}</string>
+ 	<key>CFBundlePackageType</key>
+diff --git a/chrome/app/chromium_strings.grd b/chrome/app/chromium_strings.grd
+--- a/chrome/app/chromium_strings.grd
++++ b/chrome/app/chromium_strings.grd
+@@ -294,10 +294,10 @@
+         </then>
+         <else>
+           <message name="IDS_PRODUCT_NAME" desc="The Chrome application name" translateable="false">
+-            Chromium
++            OpenArc
+           </message>
+           <message name="IDS_SHORT_PRODUCT_NAME" desc="The Chrome application short name." translateable="false">
+-            Chromium
++            OpenArc
+           </message>
+         </else>
+       </if>
+@@ -1183,13 +1183,13 @@
+ 
+       <if expr="is_macosx">
+         <message name="IDS_APP_MENU_PRODUCT_NAME" desc="The application's short name, used for the Mac's application menu, activity monitor, etc. This should be less than 16 characters. Example: Chrome, not Google Chrome." translateable="false">
+-          Chromium
++          OpenArc
+         </message>
+         <message name="IDS_HELPER_NAME" desc="The helper application's name.  Should contain the Chrome application name (IDS_PRODUCT_NAME). Example: Google Chrome Helper.">
+-          Chromium Helper
++          OpenArc Helper
+         </message>
+         <message name="IDS_SHORT_HELPER_NAME" desc="The helper application's short name, used for the Mac's application menu, activity monitor, etc. Example: Chrome Helper, not Google Chrome Helper.">
+-          Chromium Helper
++          OpenArc Helper
+         </message>
+       </if>
+ 
+diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
+--- a/components/os_crypt/common/keychain_password_mac.mm
++++ b/components/os_crypt/common/keychain_password_mac.mm
+@@ -38,8 +38,8 @@
+ const char kDefaultServiceName[] = "Chrome Safe Storage";
+ const char kDefaultAccountName[] = "Chrome";
+ #else
+-const char kDefaultServiceName[] = "Chromium Safe Storage";
+-const char kDefaultAccountName[] = "Chromium";
++const char kDefaultServiceName[] = "OpenArc Safe Storage";
++const char kDefaultAccountName[] = "OpenArc";
+ #endif
+ 
+ // These values are persisted to logs. Entries should not be renumbered and
+diff --git a/chrome/common/chrome_paths.cc b/chrome/common/chrome_paths.cc
+--- a/chrome/common/chrome_paths.cc
++++ b/chrome/common/chrome_paths.cc
+@@ -433,9 +433,14 @@
+         return false;
+       }
+ 
++#if BUILDFLAG(CHROMIUM_BRANDING)
++      cur = cur.Append(FILE_PATH_LITERAL("OpenArc"))
++                .Append(FILE_PATH_LITERAL("External Extensions"));
++#else
+       cur = cur.Append(FILE_PATH_LITERAL("Google"))
+                 .Append(FILE_PATH_LITERAL("Chrome"))
+                 .Append(FILE_PATH_LITERAL("External Extensions"));
++#endif
+ #else
+       if (!base::PathService::Get(base::DIR_MODULE, &cur)) {
+         return false;
+@@ -459,7 +464,7 @@
+           "/Library/Google/ChromeForTesting/NativeMessagingHosts"));
+ #else
+       cur = base::FilePath(FILE_PATH_LITERAL(
+-          "/Library/Application Support/Chromium/NativeMessagingHosts"));
++          "/Library/Application Support/OpenArc/NativeMessagingHosts"));
+ #endif
+ #else  // BUILDFLAG(IS_MAC)
+ #if BUILDFLAG(GOOGLE_CHROME_BRANDING)

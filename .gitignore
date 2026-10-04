@@ -1,0 +1,14 @@
+.build/
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+
+# Local credentials and release-signing material never belong in source.
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.key
+.credentials/

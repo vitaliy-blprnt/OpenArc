@@ -1,0 +1,79 @@
+# OpenArc: pinned Chromium integration map
+
+Research date: 3 October 2026. Source baseline: Chromium **154.0.8037.98**, commit **`b859317bf11f6be47f9b7799ec690a0a42a1fb33`**, matching `upstream.lock`. Findings below come from individual files fetched from the official Chromium Gitiles repository at that exact revision. No full checkout, compilation, running-browser test, extension test, or code-signing verification was performed by this reconnaissance task.
+
+## Delivered patches and evidence
+
+`patches/chromium/series` orders two small patches:
+
+1. **`0001-openarc-identity.patch`** changes the application/bundle identity, default profile directory, macOS Safe Storage identity, system native-host/external-extension registration paths, and five prominent product/helper strings. It retains Chromium's copyright attribution and does not enable Google Chrome branding.
+2. **`0002-openarc-vertical-tabs.patch`** changes the registered native vertical-tab preference default from false to true. An explicit existing preference remains authoritative; this is not a forced startup override.
+
+Both patches were checked against fresh copies of the six affected upstream files in an isolated temporary Git repository. Sequential `git apply --check` and apply passed; the patched source passed `git diff --check`; the application plist and GRIT XML parsed; the intended identity values were asserted; reverse application returned every source byte to upstream. These are patch-integrity checks, **not** Chromium build or behavior proof.
+
+## Independent macOS identity
+
+There is no single complete rebranding flag. The necessary seams are separate:
+
+| Concern | Exact source seam | OpenArc change |
+| --- | --- | --- |
+| Application, executable, helper, framework names | `chrome/app/theme/chromium/BRANDING`; consumed by `build/util/branding.gni` and `chrome/common/chrome_constants.cc` | Product and installer names use `OpenArc`; generated executable/framework/helper names follow the product value. |
+| Main and derived bundle IDs | `MAC_BUNDLE_ID` in that BRANDING file; substituted by `chrome/BUILD.gn` into plist templates | `org.openarc.browser`; creator code `OpAr`. The reverse-DNS string is a chosen application identifier, not a claim to a registered domain. |
+| Default user data and cache location | `chrome/common/chrome_paths_mac.mm` reads `CrProductDirName` from the outer application's plist | Add `CrProductDirName=OpenArc` to `chrome/app/app-Info.plist`. Default user data becomes `~/Library/Application Support/OpenArc`; the existing cache mapping follows its relative product path. |
+| Safe Storage encryption key | `components/os_crypt/common/keychain_password_mac.mm` has independent service/account constants | Unbranded branch uses service `OpenArc Safe Storage` and account `OpenArc`. Google-branded constants remain untouched. |
+| System native host and external extension registration | `chrome/common/chrome_paths.cc` has independent filesystem paths | `/Library/Application Support/OpenArc/NativeMessagingHosts` and `/Library/Application Support/OpenArc/External Extensions`. Existing Google-branded paths remain unchanged. |
+| Prominent UI and macOS application/helper names | `chrome/app/chromium_strings.grd` | Set `IDS_PRODUCT_NAME`, `IDS_SHORT_PRODUCT_NAME`, `IDS_APP_MENU_PRODUCT_NAME`, `IDS_HELPER_NAME`, and `IDS_SHORT_HELPER_NAME` to OpenArc names. |
+| Developer ID / Team ID | `MAC_TEAM_ID`, signing configuration and actual identity | Remains unset. No signing identity or entitlement is invented. |
+
+Sources: [BRANDING](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/app/theme/chromium/BRANDING), [branding GN variables](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/build/util/branding.gni), [macOS executable constants](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/common/chrome_constants.cc), [bundle generation](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/BUILD.gn), [profile/cache paths](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/common/chrome_paths_mac.mm), [Safe Storage constants](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/os_crypt/common/keychain_password_mac.mm), [product strings](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/app/chromium_strings.grd).
+
+Keep the development launcher's explicit, isolated `--user-data-dir` even after adding the plist default. The plist also isolates a normal Finder launch. Neither a new bundle ID nor `--user-data-dir` changes Safe Storage's hardcoded service/account by itself. Do not share a Chrome/Arc/Chromium user-data directory, reuse its encryption key, or copy encrypted login databases into OpenArc.
+
+The async macOS encryption provider constructs the same common `KeychainPassword` class, so it picks up the patched names rather than a second service/account pair. The pinned `components/os_crypt` tree contains `common`, `async`, and a `browser/BUILD.gn`; it has no legacy `sync` directory. This verifies the inspected OS Crypt path, not every possible Apple credential integration. [Async Keychain provider](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/os_crypt/async/browser/keychain_key_provider.mm), [OS Crypt tree](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/components/os_crypt/).
+
+User native-host and external-extension paths already derive from `DIR_USER_DATA`, so they automatically become the chosen OpenArc profile root plus `NativeMessagingHosts` or `External Extensions`. The system directories require the separate patch above: upstream's unbranded native-host directory is Chromium-specific, while its macOS external-extension directory otherwise points at Google/Chrome for all brands. The patch neither modifies nor copies existing manifests. M1 must exercise supported host registration in the new locations and report incompatible vendor installers; silently falling back to another browser's directories would undo that explicit identity boundary. [Extension and native-messaging paths](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/common/chrome_paths.cc).
+
+The patch intentionally leaves the existing Chromium image assets and the many secondary Chromium text references in place. It establishes an independent development application; it does not constitute a complete visual-brand audit. The company/copyright attribution remains intact. A later icon/string pass must preserve required attribution and be checked in the actual built bundle.
+
+### GN branding selection
+
+At this pin, `is_chrome_branded=false` selects the public Chromium branch. `branding_file_path` defaults to the selected theme's `BRANDING`; `branding_path_product` separately selects the GRIT source, and `branding_path_component` separately selects theme assets. Merely pointing at another BRANDING file would not automatically select custom strings or icons. The current patch keeps the established Chromium asset/GRIT paths and changes their narrowly scoped contents, avoiding a partially populated custom theme tree. Do not set `is_chrome_branded=true`: the source comments explicitly associate that mode with internal Google resources. [Branding arguments](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/build/config/chrome_build.gni), [GRIT source selection](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/app/BUILD.gn).
+
+## Native vertical tabs at the pinned revision
+
+This revision already contains the native Views implementation. The startup path is:
+
+1. `chrome/browser/ui/tabs/tab_strip_prefs.cc` registers `prefs::kVerticalTabsEnabled` as false upstream. Patch 0002 changes only that default to true.
+2. `chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc` reads that preference and returns its value from `ShouldDisplayVerticalTabs()`. It also manages explicit preference changes, collapse state, width and session integration.
+3. `chrome/browser/ui/browser_window/internal/browser_window_features.cc` constructs the controller with the real browser, profile preferences and session service.
+4. `chrome/browser/ui/views/frame/browser_view.cc` creates `VerticalTabStripRegionView` and restricts drawing the vertical strip to normal browser windows.
+5. `chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc` composes the region's top and bottom controls, resize affordance, and shared tab-strip views.
+
+Sources: [preference registration](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/tabs/tab_strip_prefs.cc), [state controller](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc), [window feature construction](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/browser_window/internal/browser_window_features.cc), [browser view](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/frame/browser_view.cc), [vertical region](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc).
+
+No new vertical-tabs enable feature flag was needed for this source change. Controller construction is inside the normal-window block, and `BrowserView::ShouldDrawVerticalTabStrip()` checks ordinary tab-strip availability, the controller, its preference-driven display value and normal-window type; it does not consult a separate vertical-tabs feature flag. Expand-on-hover is a separate feature, disabled by default at this pin; patch 0002 does not enable it. Do not copy current-main controller names into this revision: current main already has a separate `vertical_tab_strip_state_controller_impl.cc`, but the pinned release does not. [Pinned tab features](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/tabs/features.cc), [browser view display condition](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/frame/browser_view.cc).
+
+The pinned/unpinned containers and much of the view/model adapter now live under `chrome/browser/ui/views/tabs/common/`, not solely under `tabs/vertical/`. The upstream pinned container lays out live pinned tabs; it is not a durable Arc-style saved-entry store. Enabling vertical tabs therefore supplies the native starting surface, **not** saved-URL reset behavior, persistent unloaded bookmarks, Spaces, or the requested finished sidebar. [Pinned container](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc), [unpinned container](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc), [shared collection controller](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc).
+
+## Lowest-risk next native slice
+
+These are proposed integration steps, not implemented functionality:
+
+1. Build and launch the two patches in an isolated profile. Confirm product/bundle identity, vertical tab activation, normal popup behavior, regular navigation, extension actions and relaunch persistence before expanding the patch set.
+2. Add a profile-scoped workspace service and a real-tab adapter with the `BROWSER-PLAN.md` state contract. Persist saved destination separately from current navigation. Keep native tab/session ownership in Chromium.
+3. Add durable Saved rows and a bottom Space selector to the existing Views region. A saved row without a live tab should be a workspace control; do not invent a Chromium tab solely to make it visible. Activation creates or focuses its real tab. Closing it removes the live tab while keeping the saved row.
+4. Extend the shared collection presentation carefully for the current Space. Keep extension-visible indices, groups, pin ordering and events truthful, even when rows from another Space are not displayed. Native pinned tabs cannot simply be renamed Saved without implementing the different lifetime semantics.
+5. Add explicit Save/Unpin/Remove/Return-to-saved-URL commands and preserve full labels in the saved section. Keep ordinary browser toolbar/permission/extension surfaces until their relocation has equivalent behavior and accessibility evidence.
+
+The source has upstream AI-related integration points, including a Gemini placeholder in the vertical region. These patches do not audit or disable every upstream AI surface. The product's no-AI requirement remains an explicit follow-up, using verified build/feature seams rather than deleting unrelated browser services. No SwiftUI, Electron, or separate page-rendering shell is introduced.
+
+## Build and release hazards
+
+- **SDK:** this pin sets the official SDK reference to **26.5, build 25F70**, while `mac_sdk_overrides.gni` permits a minimum of **15**. The coordinating task reported Xcode 26.3 / SDK 26.2 on this host. That SDK clears the configured minimum for a system-Xcode development build, but is older than the reference SDK; actual compilation must settle compatibility. Do not rewrite SDK constants merely to claim support. [SDK configuration](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/build/config/mac/mac_sdk.gni), [minimum override](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/build/config/mac/mac_sdk_overrides.gni).
+- **Build environment:** follow the pinned macOS instructions with full Xcode, its SDK and an APFS checkout. GN/Ninja build success is separate from launch, extension and signing evidence. Keep `is_chrome_branded=false` and a non-official development configuration explicit where practical. [Official macOS instructions at the pin](https://chromium.googlesource.com/chromium/src/+/b859317bf11f6be47f9b7799ec690a0a42a1fb33/docs/mac_build_instructions.md).
+- **Credentials:** a mock Keychain option may be useful for isolated UI tests, but would invalidate real Safe Storage/password-manager acceptance. The delivered patches do not enable it or weaken the sandbox.
+- **Signed identity:** a new application identifier and Keychain service do not prove Developer ID signing, notarization, native messaging discovery, passkeys or a vendor's trusted-browser checks. Test those with the final signed identity before calling extension support qualified.
+- **Updates:** changing the Safe Storage name again after real data is created requires a deliberate migration. Keep bundle ID, product directory and key identity stable; changing source branding does not configure an updater.
+- **Tests:** upstream tests that assume horizontal tabs as the registered default may need explicit fixture preferences. Do not restore a false application default merely to hide such test failures; distinguish default-policy checks from horizontal-mode tests.
+
+The immediate completion gate remains a built and visibly verified independent Chromium application with native vertical tabs. Arc-style persistence, Spaces, no-AI product qualification and full extension acceptance remain subsequent gates.

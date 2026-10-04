@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "chromium": {
+    "repository": "https://chromium.googlesource.com/chromium/src.git",
+    "revision": "b859317bf11f6be47f9b7799ec690a0a42a1fb33",
+    "version": "154.0.8037.98"
+  },
+  "depot_tools": {
+    "repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+    "revision": "8a5434051036b32412a2ecb10c213a72e3f3ccb9"
+  },
+  "build": {
+    "target_os": "mac",
+    "target_cpu": "arm64",
+    "output_dir": "out/OpenArc",
+    "gn_args": {
+      "is_chrome_branded": false,
+      "is_official_build": false,
+      "is_debug": false,
+      "is_component_build": true,
+      "symbol_level": 0,
+      "blink_symbol_level": 0,
+      "v8_symbol_level": 0,
+      "chrome_pgo_phase": 0,
+      "target_cpu": "arm64",
+      "use_remoteexec": false
+    }
+  }
+}

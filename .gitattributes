@@ -1,0 +1,8 @@
+# Unified diff context lines have a prefix space, including before upstream tabs.
+*.patch whitespace=-blank-at-eol,-space-before-tab
+
+# Keep source tooling and patch files consistent across contributor platforms.
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.patch text eol=lf

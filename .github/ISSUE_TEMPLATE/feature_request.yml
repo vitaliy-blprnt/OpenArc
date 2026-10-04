@@ -1,0 +1,31 @@
+name: Feature proposal
+description: Propose an improvement within OpenArc's browser scope.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read docs/BROWSER-PLAN.md first. OpenArc focuses on saved tabs, Spaces, a left sidebar, and the Chromium extension platform. AI features are outside scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the browsing task and what is difficult today.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: Explain what the user would do and what should happen.
+    validations:
+      required: true
+  - type: textarea
+    id: state
+    attributes:
+      label: Data and compatibility effects
+      description: Note affected saved tabs, Spaces, Profiles, multiple windows, private browsing, extensions, or migrations. Use "none identified" if appropriate.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and completion checks
+      description: Describe alternatives and observable checks that would show the change works.

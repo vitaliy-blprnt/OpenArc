@@ -1,0 +1,52 @@
+name: Extension compatibility
+description: Report installation, runtime, update, or native-integration behavior.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Extension compatibility is a product requirement. This form records a gap; it does not define a supported-extension allowlist.
+        Follow SECURITY.md for vulnerabilities. Do not include passwords, tokens, cookies, or private URLs.
+  - type: input
+    id: extension
+    attributes:
+      label: Extension name, ID, and version
+      description: Include the public store link if available.
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: OpenArc commit, Chromium revision, and platform
+      description: Include macOS version and CPU architecture.
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Affected flow
+      options:
+        - Installation or permission prompt
+        - Runtime or page interaction
+        - Tabs, windows, bookmarks, or sessions
+        - Extension update or restart
+        - Native messaging, desktop app, or biometrics
+        - Other extension behavior
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps, expected result, and actual result
+      description: Include Space/Profile state where relevant. Use synthetic accounts and data in shared examples.
+    validations:
+      required: true
+  - type: textarea
+    id: identity
+    attributes:
+      label: Build and native integration details
+      description: State unsigned/local or signed installation; desktop companion app/version and signing or vendor trust errors where relevant. Redact personal certificate identity details.
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Comparison evidence
+      description: If already tested in Chromium or Chrome, record the exact version and result. An upstream comparison is helpful, not required.
