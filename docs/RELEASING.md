@@ -14,6 +14,25 @@ Preserve build/test logs with secrets and personal paths removed. Compare the
 locked engine with current upstream stable/security releases when preparing each
 candidate; a previously verified lock can become outdated.
 
+Run the read-only maintenance check with Python 3.10+:
+
+```sh
+python3 scripts/check_upstream.py
+```
+
+It prints JSON comparing `upstream.lock` with the highest numeric version in any
+currently active macOS ARM64 stable rollout cohort from Google's
+[Version History API](https://versionhistory.googleapis.com/v1/chrome/platforms/mac_arm64/channels/stable/versions/all/releases?filter=endtime=none).
+The output includes the source, check time, active versions, and the highest
+version's cohort fractions; a small rollout still counts. Exit codes are `0`
+for `current`, `1` for `update-available`, and `2` for `unknown` (including network,
+invalid/incomplete response, or a lock ahead of the active versions). Requests
+use a 15-second socket timeout and a 1 MiB response limit. This command does not
+modify the lock, select an upgrade, schedule checks, or qualify build/update
+delivery. Assess an available version against the milestone gates before changing
+the pin. The API's [filter semantics](https://developer.chrome.com/docs/web-platform/versionhistory/reference#filter-results)
+define `endtime=none` as releases still live.
+
 Use the gates in [BROWSER-PLAN.md](BROWSER-PLAN.md). Record each required check as
 passed, failed, or unverified, linked to evidence from that candidate. An unresolved
 required check blocks qualification; do not relabel it as unsupported to claim
