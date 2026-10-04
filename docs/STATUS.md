@@ -34,10 +34,10 @@ does not promise this revision remains current after this checkpoint.
 | Host/toolchain preflight | Passed for attempting a development build |
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
 | Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
-| Tooling test suite | 48 tests passed locally, including build provenance, dependency inventory/bootstrap, and isolated reference native-host safeguards |
-| Extension fixture scope guards | 20 Node tests passed; includes browser timer receiver binding, pin/group checks, and interrupted group cleanup guards |
+| Tooling test suite | 67 tests passed locally, including build provenance, baseline output reuse, dependency inventory/bootstrap, isolated native-host safeguards, and read-only upstream checks |
+| Extension fixture scope guards | 21 Node tests passed; includes browser timer receiver binding, pin/group checks, and interrupted group cleanup guards |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `57ce609`, including 48 Python and 13 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37176929227)); later local test additions are not implied by that run |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `ee623bd`, including 60 Python and 20 Node tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37177182033)); later local test additions are not implied by that run |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Visible OpenArc browser UI | Not tested |
@@ -45,6 +45,15 @@ does not promise this revision remains current after this checkpoint.
 | OpenArc Chrome Web Store / extension runtime / native integration | Not tested; reference-browser fixture results do not qualify OpenArc |
 | Arc-style saved tabs and Spaces | Not implemented |
 | Signed release and updater | Not implemented |
+
+The optional `build --reuse-baseline` transition has tooling coverage. It keeps
+the completed baseline's output path for incremental compilation, preserves its
+receipt as historical evidence, and invalidates baseline launch qualification
+before rebuilding. Its actual use awaits the baseline build and runtime checks.
+
+The read-only upstream check observed early stable `155.0.8059.26` at a `0.005`
+rollout fraction on 4 October 2026 UTC, above the still-active pinned version.
+This is an upgrade candidate, not a new source pin or a qualified update.
 
 The existing extension inventory is local-only under ignored build artifacts.
 It is not part of public source or public evidence.

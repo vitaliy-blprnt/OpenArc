@@ -93,6 +93,7 @@ class Workflow:
         self.checkout = self.safe_path(self.work / "chromium")
         self.src = self.safe_path(self.checkout / "src")
         self.state_file = self.safe_path(self.work / "patch-state.json")
+        self.promotion_file = self.safe_path(self.work / "baseline-promotion.json")
         try:
             self.lock = json.loads((self.root / "upstream.lock").read_text())
         except (OSError, ValueError) as exc:
@@ -138,6 +139,8 @@ class Workflow:
         output = relative_path(build.get("output_dir"), "build.output_dir")
         if len(output.parts) != 2 or output.parts[0] != "out":
             raise WorkflowError("build.output_dir must be a direct child of out/, e.g. out/OpenArc")
+        if output == Path("out/Baseline"):
+            raise WorkflowError("out/Baseline is reserved; use build --reuse-baseline for explicit promotion")
         args = build.get("gn_args")
         if not isinstance(args, dict) or args.get("target_cpu") != "arm64":
             raise WorkflowError("build.gn_args must include target_cpu: arm64")
@@ -445,7 +448,61 @@ class Workflow:
         return {"path": str(executable.relative_to(self.src)), "sha256": file_digest(executable),
                 "info_plist_sha256": file_digest(info) if info.is_file() else None}
 
-    def build(self, jobs: int, baseline: bool = False) -> None:
+    def read_build_receipt(self, baseline: bool) -> dict:
+        try:
+            receipt = json.loads(self.build_receipt_path(baseline).read_text())
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("No readable successful build receipt for this mode; run build"
+                                + (" --baseline" if baseline else "") + " before launch or promotion") from exc
+        if not isinstance(receipt, dict) or receipt.get("receipt_version") != 1:
+            raise WorkflowError("Unsupported successful build receipt; rebuild before launch or promotion")
+        return receipt
+
+    def validate_baseline_seed(self, receipt: Any, inputs: dict) -> None:
+        # Known applied patches are already validated by build_inputs(). The
+        # original baseline must have built these same pinned inputs, before
+        # the recorded patch overlay was applied.
+        pristine = dict(inputs, baseline=True, patches=[], checkout_diff_sha256=digest(b""))
+        if (not isinstance(receipt, dict) or receipt.get("receipt_version") != 1
+                or receipt.get("inputs") != pristine or receipt.get("output") != "out/Baseline"
+                or not isinstance(receipt.get("binary"), dict)
+                or receipt["binary"].get("path") != "out/Baseline/Chromium.app/Contents/MacOS/Chromium"):
+            raise WorkflowError("Baseline receipt does not match the current pristine lock and dependencies; cannot reuse output")
+
+    def promotion_state(self, inputs: dict) -> dict | None:
+        self.safe_path(self.promotion_file)
+        if not self.promotion_file.exists():
+            return None
+        try:
+            state = json.loads(self.promotion_file.read_text())
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("Unreadable baseline promotion state; preserve it for manual review") from exc
+        if (not isinstance(state, dict) or state.get("schema_version") != 1
+                or state.get("output") != "out/Baseline"):
+            raise WorkflowError("Invalid baseline promotion state; preserve it for manual review")
+        self.validate_baseline_seed(state.get("baseline_receipt"), inputs)
+        return state
+
+    def build_output(self, baseline: bool, inputs: dict, reuse_baseline: bool = False) -> tuple[Path, dict | None]:
+        if baseline:
+            if reuse_baseline or self.promotion_file.exists():
+                raise WorkflowError("Baseline output is reserved for promoted OpenArc; it cannot qualify an unmodified baseline")
+            return self.baseline_output, None
+        state = self.promotion_state(inputs)
+        if not state and not reuse_baseline:
+            return self.output, None
+        branding = self.safe_path(self.src / "chrome/app/theme/chromium/BRANDING")
+        if not branding.is_file() or "PRODUCT_FULLNAME=OpenArc" not in branding.read_text().splitlines():
+            raise WorkflowError("Baseline promotion requires the applied OpenArc product identity")
+        if not state:
+            receipt = self.read_build_receipt(True)
+            self.validate_baseline_seed(receipt, inputs)
+            if receipt["binary"] != self.binary_identity(self.executable(True)):
+                raise WorkflowError("Baseline executable or bundle identity changed; cannot reuse its build receipt")
+            state = {"schema_version": 1, "output": "out/Baseline", "baseline_receipt": receipt}
+        return self.baseline_output, state
+
+    def build(self, jobs: int, baseline: bool = False, reuse_baseline: bool = False) -> None:
         self.require_mac()
         if not 1 <= jobs <= 64:
             raise WorkflowError("--jobs must be between 1 and 64")
@@ -454,10 +511,16 @@ class Workflow:
         self.assert_pin(self.src, "chromium")
         self.assert_clean(self.depot)
         inputs = self.build_inputs(baseline)
-        output = self.baseline_output if baseline else self.output
+        output, promotion = self.build_output(baseline, inputs, reuse_baseline)
         output_relative = str(output.relative_to(self.src))
         args = "\n".join(f"{name} = {gn_value(value)}" for name, value in sorted(self.lock["build"]["gn_args"].items()))
         receipt_path = self.build_receipt_path(baseline)
+        if promotion:
+            # This marker preserves historical baseline evidence, not a usable
+            # baseline artifact. It also blocks baseline launch if interrupted
+            # before removing its former successful receipt.
+            atomic_json(self.promotion_file, promotion)
+            self.build_receipt_path(True).unlink(missing_ok=True)
         # Once compilation starts, an earlier success must not qualify binaries
         # left behind by a failed or interrupted rebuild.
         receipt_path.unlink(missing_ok=True)
@@ -467,33 +530,35 @@ class Workflow:
         if self.build_inputs(baseline) != inputs:
             raise WorkflowError("Source, patch series or dependency inventory changed during the build; no successful receipt recorded")
         atomic_json(receipt_path, {
-            "receipt_version": 1, "inputs": inputs, "binary": self.binary_identity(self.executable(baseline)),
+            "receipt_version": 1, "inputs": inputs,
+            "binary": self.binary_identity(self.executable(baseline, output, "OpenArc" if promotion else None)),
             "jobs": jobs, "output": output_relative,
             "qualification": "Compilation succeeded; runtime, extensions, signing and release qualification remain separate."})
         print(f"Build completed: {output}")
 
     def verified_executable(self, baseline: bool) -> Path:
-        receipt_path = self.build_receipt_path(baseline)
-        try:
-            receipt = json.loads(receipt_path.read_text())
-        except (OSError, ValueError) as exc:
-            raise WorkflowError("No readable successful build receipt for this mode; run build"
-                                + (" --baseline" if baseline else "") + " before launch") from exc
-        if (not isinstance(receipt, dict) or receipt.get("receipt_version") != 1
-                or receipt.get("inputs") != self.build_inputs(baseline)):
+        if baseline and self.promotion_file.exists():
+            raise WorkflowError("Baseline output was promoted to OpenArc; the historical baseline receipt cannot authorize launch")
+        receipt = self.read_build_receipt(baseline)
+        inputs = self.build_inputs(baseline)
+        if receipt.get("inputs") != inputs:
             raise WorkflowError("Successful build receipt does not match the current mode, lock, patches or dependencies; rebuild before launch")
-        executable = self.executable(baseline)
+        output, promotion = self.build_output(baseline, inputs)
+        if receipt.get("output") != str(output.relative_to(self.src)):
+            raise WorkflowError("Successful build receipt output does not match the selected managed output; rebuild before launch")
+        executable = self.executable(baseline, output, "OpenArc" if promotion else None)
         if receipt.get("binary") != self.binary_identity(executable):
             raise WorkflowError("Browser executable or bundle identity changed since the successful build; rebuild before launch")
         return executable
 
-    def executable(self, baseline: bool = False) -> Path:
-        output = self.baseline_output if baseline else self.output
+    def executable(self, baseline: bool = False, output: Path | None = None, product: str | None = None) -> Path:
+        output = output if output is not None else (self.baseline_output if baseline else self.output)
+        names = ("Chromium",) if baseline else ((product,) if product else ("OpenArc", "Chromium"))
         candidates = [self.safe_path(output / (name + ".app") / "Contents" / "MacOS" / name)
-                      for name in ("OpenArc", "Chromium")]
+                      for name in names]
         found = [path for path in candidates if path.is_file() and os.access(path, os.X_OK)]
         if len(found) != 1:
-            raise WorkflowError("Expected exactly one executable OpenArc.app or Chromium.app in the locked output directory; found "
+            raise WorkflowError("Expected exactly one executable " + "/".join(names) + " application in the selected output directory; found "
                                 + str(len(found)) + ". Preserve/review stale build outputs manually.")
         return found[0]
 
@@ -547,6 +612,7 @@ def main(argv: list[str] | None = None) -> int:
     build = commands.add_parser("build")
     build.add_argument("--jobs", type=int, default=8, help="Compiler concurrency (default: 8)")
     build.add_argument("--baseline", action="store_true", help="Build clean upstream in out/Baseline without applying project patches")
+    build.add_argument("--reuse-baseline", action="store_true", help="Promote a verified baseline output to incremental OpenArc output; apply patches first")
     launch = commands.add_parser("launch")
     launch.add_argument("url", nargs="?", help="Optional explicit HTTP(S) URL")
     launch.add_argument("--baseline", action="store_true", help="Launch out/Baseline with a separate baseline profile")
@@ -554,7 +620,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workflow = Workflow(Path(__file__).resolve().parent.parent)
         if args.command == "build":
-            workflow.build(args.jobs, args.baseline)
+            workflow.build(args.jobs, args.baseline, args.reuse_baseline)
         elif args.command == "launch":
             workflow.launch(args.url, args.baseline)
         elif args.command == "check":

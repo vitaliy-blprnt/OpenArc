@@ -58,6 +58,9 @@ class WorkflowTests(unittest.TestCase):
         git(repo, "config", "core.autocrlf", "false")
         (repo / "example.txt").write_text("base\n")
         (repo / ".gitignore").write_text("out/\nthird_party/\n")
+        branding = repo / "chrome/app/theme/chromium/BRANDING"
+        branding.parent.mkdir(parents=True)
+        branding.write_text("PRODUCT_FULLNAME=Chromium\n")
         git(repo, "add", ".")
         git(repo, "commit", "-m", "fixture")
         self.lock["chromium"]["revision"] = git(repo, "rev-parse", "HEAD")
@@ -76,25 +79,44 @@ class WorkflowTests(unittest.TestCase):
             file.write(name + "\n")
         return path
 
-    def executable(self, workflow, name="Chromium"):
-        executable = workflow.output / f"{name}.app" / "Contents" / "MacOS" / name
-        executable.parent.mkdir(parents=True)
+    def executable(self, workflow, name="Chromium", output=None):
+        executable = (output or workflow.output) / f"{name}.app" / "Contents" / "MacOS" / name
+        executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text("#!/bin/sh\nexit 0\n")
         executable.chmod(0o755)
         return executable
 
-    def simulated_build(self, workflow, baseline=False):
+    def simulated_build(self, workflow, baseline=False, reuse_baseline=False):
         """Run real validation/receipts with only GN/compiler invocation simulated."""
         real_run = workflow.run
+        compiler_calls = []
 
         def runner(args, **kwargs):
             if args[0] in (str(workflow.depot / "gn"), str(workflow.depot / "autoninja")):
+                compiler_calls.append(args)
                 return subprocess.CompletedProcess(args, 0, "", "")
             return real_run(args, **kwargs)
 
         with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
                 patch.object(workflow, "ensure_bootstrap"), patch.object(workflow, "run", side_effect=runner):
-            workflow.build(2, baseline)
+            workflow.build(2, baseline, reuse_baseline)
+        return compiler_calls
+
+    def apply_identity(self, workflow):
+        path = self.series.parent / "identity.patch"
+        name = "chrome/app/theme/chromium/BRANDING"
+        path.write_text(f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n"
+                        "@@ -1 +1 @@\n-PRODUCT_FULLNAME=Chromium\n+PRODUCT_FULLNAME=OpenArc\n")
+        self.series.write_text("identity.patch\n")
+        workflow.apply()
+
+    def baseline_for_promotion(self):
+        self.repository()
+        workflow = self.workflow()
+        executable = self.executable(workflow, output=workflow.baseline_output)
+        self.simulated_build(workflow, baseline=True)
+        self.apply_identity(workflow)
+        return workflow, executable
 
     def add_dependency(self, repo):
         dependency = repo / "third_party" / "example"
@@ -138,7 +160,7 @@ class WorkflowTests(unittest.TestCase):
             self.workflow()
 
     def test_managed_paths_cannot_escape_or_redirect(self):
-        for path in ("/tmp/output", "out/../../outside", "../outside", "out", "out/./OpenArc"):
+        for path in ("/tmp/output", "out/../../outside", "../outside", "out", "out/./OpenArc", "out/Baseline"):
             self.lock["build"]["output_dir"] = path
             self.write_lock()
             with self.assertRaises(openarc.WorkflowError):
@@ -379,6 +401,98 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(executable.exists())
         self.assertFalse(workflow.build_receipt_path(False).exists())
         with self.assertRaisesRegex(openarc.WorkflowError, "successful build receipt"):
+            workflow.launch_command()
+
+    def test_promotion_requires_successful_matching_baseline_before_mutation(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow, output=workflow.baseline_output)
+        self.apply_identity(workflow)
+        with self.assertRaisesRegex(openarc.WorkflowError, "successful build receipt"):
+            self.simulated_build(workflow, reuse_baseline=True)
+        self.assertFalse(workflow.promotion_file.exists())
+        self.assertFalse(workflow.build_receipt_path(False).exists())
+
+    def test_promotion_rejects_modified_baseline_binary_without_losing_receipt(self):
+        workflow, baseline = self.baseline_for_promotion()
+        baseline.write_text("changed baseline\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "Baseline executable or bundle identity changed"):
+            self.simulated_build(workflow, reuse_baseline=True)
+        self.assertFalse(workflow.promotion_file.exists())
+        self.assertTrue(workflow.build_receipt_path(True).exists())
+
+    def test_promotion_selects_openarc_and_preserves_historical_baseline(self):
+        workflow, baseline = self.baseline_for_promotion()
+        original = workflow.read_build_receipt(True)
+        baseline_bytes = baseline.read_bytes()
+        development = self.executable(workflow, "OpenArc", workflow.baseline_output)
+        commands = self.simulated_build(workflow, reuse_baseline=True)
+        self.assertEqual(commands[0][:3], [str(workflow.depot / "gn"), "gen", "out/Baseline"])
+        self.assertEqual(commands[1][:3], [str(workflow.depot / "autoninja"), "-C", "out/Baseline"])
+        self.assertEqual(baseline.read_bytes(), baseline_bytes)
+        self.assertEqual(json.loads(workflow.promotion_file.read_text())["baseline_receipt"], original)
+        self.assertFalse(workflow.build_receipt_path(True).exists())
+        receipt = workflow.read_build_receipt(False)
+        self.assertEqual(receipt["output"], "out/Baseline")
+        self.assertFalse(receipt["inputs"]["baseline"])
+        self.assertEqual(workflow.launch_command()[0], str(development))
+        self.assertIn("--user-data-dir=" + str(workflow.work / "profiles/development"), workflow.launch_command())
+        self.assertNotIn("--use-mock-keychain", workflow.launch_command())
+        # Even accidentally restoring the old receipt cannot authorize a
+        # baseline launch from output containing rebuilt shared components.
+        openarc.atomic_json(workflow.build_receipt_path(True), original)
+        with self.assertRaisesRegex(openarc.WorkflowError, "promoted"):
+            workflow.launch_command(baseline=True)
+
+    def test_failed_promotion_blocks_both_launches_and_retry_uses_same_output(self):
+        workflow, _ = self.baseline_for_promotion()
+
+        def failed_bootstrap():
+            self.assertTrue(workflow.promotion_file.exists())
+            self.assertFalse(workflow.build_receipt_path(True).exists())
+            self.assertFalse(workflow.build_receipt_path(False).exists())
+            raise openarc.WorkflowError("simulated bootstrap failure")
+
+        with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
+                patch.object(workflow, "ensure_bootstrap", side_effect=failed_bootstrap):
+            with self.assertRaisesRegex(openarc.WorkflowError, "simulated bootstrap failure"):
+                workflow.build(2, reuse_baseline=True)
+        with self.assertRaisesRegex(openarc.WorkflowError, "promoted"):
+            workflow.launch_command(baseline=True)
+        with self.assertRaisesRegex(openarc.WorkflowError, "successful build receipt"):
+            workflow.launch_command()
+        # A new process must retain output ownership, including after failure.
+        retry = self.workflow()
+        development = self.executable(retry, "OpenArc", retry.baseline_output)
+        self.simulated_build(retry)
+        self.assertEqual(retry.launch_command()[0], str(development))
+        self.assertFalse(retry.output.exists())
+
+    def test_promotion_never_accepts_leftover_chromium_as_openarc_result(self):
+        workflow, baseline = self.baseline_for_promotion()
+        with self.assertRaisesRegex(openarc.WorkflowError, "executable OpenArc application"):
+            self.simulated_build(workflow, reuse_baseline=True)
+        self.assertTrue(baseline.exists())
+        self.assertFalse(workflow.build_receipt_path(False).exists())
+        self.assertFalse(workflow.build_receipt_path(True).exists())
+
+    def test_promotion_rejects_changed_dependencies_before_reusing_output(self):
+        workflow, _ = self.baseline_for_promotion()
+        self.add_dependency(workflow.src)
+        with self.assertRaisesRegex(openarc.WorkflowError, "current pristine lock and dependencies"):
+            self.simulated_build(workflow, reuse_baseline=True)
+        self.assertFalse(workflow.promotion_file.exists())
+        self.assertTrue(workflow.build_receipt_path(True).exists())
+
+    def test_launch_rejects_receipt_with_another_output_directory(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow)
+        self.simulated_build(workflow)
+        receipt = workflow.read_build_receipt(False)
+        receipt["output"] = "../../another-profile"
+        openarc.atomic_json(workflow.build_receipt_path(False), receipt)
+        with self.assertRaisesRegex(openarc.WorkflowError, "receipt output does not match"):
             workflow.launch_command()
 
     def test_build_rejects_missing_dependency_inventory(self):

@@ -85,6 +85,40 @@ Baseline launch uses Chromium's mock Keychain so it cannot access an existing
 Chromium Safe Storage entry. Use synthetic browsing data only in that mode; it
 does not qualify credential storage or native password-manager integration.
 
+### Reuse the completed baseline compilation
+
+After the unmodified baseline has compiled and its launch has been verified,
+**quit its browser process and windows** before promoting its output. Component
+libraries are rebuilt in place; a leftover `Chromium.app` is not an independent
+baseline installation. Then run:
+
+```sh
+python3 scripts/openarc.py apply
+python3 scripts/openarc.py build --reuse-baseline --jobs 8
+python3 scripts/openarc.py launch
+```
+
+This explicit option keeps the same `out/Baseline` path and Siso incremental
+state. GN and `autoninja` still run to rebuild every affected target; reuse does
+not substitute an earlier compilation for the patched build. It requires the
+complete recorded patches, the OpenArc product identity, a successful baseline
+receipt matching the current lock/dependencies, and unchanged baseline executable
+and bundle metadata. It does not change `upstream.lock` or clean build outputs.
+
+Before bootstrap, GN, or compilation can mutate output, the workflow records
+`.build/baseline-promotion.json` and invalidates both launch receipts. That file
+preserves the baseline receipt as **historical evidence only**. The old Chromium
+bundle is retained, but baseline launch remains blocked after promotion, including
+after a failed build. Only a successful incremental build creates a development
+receipt for `OpenArc.app`, explicitly recording `out/Baseline`; normal launch
+uses `.build/profiles/development` without the baseline mock Keychain flag.
+
+Subsequent `build` commands, including retries after interruption, retain the
+promoted output selection. Keep the promotion record: removing it is not a way
+to restore a baseline. Its seed remains bound to the original lock/dependencies;
+an upstream change requires a separately reviewed output transition. These
+receipts establish compilation provenance, not runtime or release qualification.
+
 Pinning depot_tools disables automatic updates, including its implicit bootstrap.
 The workflow explicitly invokes the pinned `ensure_bootstrap` script and checks
 that its Python launcher works. To repair an already fetched checkout independently
@@ -105,10 +139,11 @@ The tooling keeps its workspace under the repository's `.build` directory:
 | --- | --- |
 | `.build/depot_tools` | Pinned Chromium build tooling |
 | `.build/chromium/src` | Chromium source and dependency checkout |
-| `.build/chromium/src/out/OpenArc` | Generated build output |
+| `.build/chromium/src/out/OpenArc` | Default development build output |
 | `.build/profiles/development` | Isolated development browser data |
-| `.build/chromium/src/out/Baseline` | Separate unmodified baseline output |
+| `.build/chromium/src/out/Baseline` | Unmodified baseline output, or explicitly promoted incremental OpenArc output |
 | `.build/profiles/baseline` | Isolated baseline browser data |
+| `.build/baseline-promotion.json` | Promoted output ownership and historical baseline receipt |
 
 Do not use arbitrary environment overrides or local GN edits as release evidence.
 Record every intentional configuration change and its source revision. A
@@ -127,9 +162,11 @@ An optional positional HTTP(S) URL can be supplied, for example:
 python3 scripts/openarc.py launch https://example.com/
 ```
 
-The launcher uses `.build/profiles/development` and locates exactly one expected
-Chromium/OpenArc application binary in the build output. It refuses ambiguous
-application output and does not accept an external `--user-data-dir` override.
+The launcher uses `.build/profiles/development` and locates the expected
+application in the output recorded by the successful receipt. For an explicitly
+promoted output it requires `OpenArc.app`, preserving and ignoring stale
+`Chromium.app`; ordinary outputs still reject ambiguous application candidates.
+It does not accept an external `--user-data-dir` override.
 It also requires a successful build receipt matching the lock, patch state,
 dependency revisions, executable, and bundle metadata. A failed rebuild
 invalidates the prior receipt; it cannot silently launch an older binary under
