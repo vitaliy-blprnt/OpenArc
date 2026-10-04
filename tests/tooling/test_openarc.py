@@ -841,6 +841,155 @@ class WorkflowTests(unittest.TestCase):
                 output.assert_not_called()
                 self.assertTrue(workflow.build_receipt_path(False).is_file())
 
+    def test_workspaces_launch_uses_verified_development_build_and_isolated_profile(self):
+        self.repository()
+        workflow = self.workflow()
+        self.apply_identity(workflow)
+        executable = self.executable(workflow, "OpenArc")
+        self.simulated_build(workflow)
+        receipt = workflow.build_receipt_path(False).read_bytes()
+        url = "https://example.com/?literal=$(unchanged)&space=two%20words"
+        calls = []
+        real_run = subprocess.run
+
+        def launch_helper(args, **kwargs):
+            if args[0] != "/usr/bin/open":
+                return real_run(args, **kwargs)
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0)
+
+        with patch.object(workflow, "require_mac"), \
+                patch.object(openarc.subprocess, "run", side_effect=launch_helper), \
+                patch("builtins.print") as output:
+            workflow.launch(url, workspaces=True)
+        report = json.loads(output.call_args.args[0])
+        expected = [str(executable), "--user-data-dir=" + str(workflow.work / "profiles/workspaces"),
+                    "--no-first-run", "--no-default-browser-check",
+                    "--enable-features=OpenArcWorkspaces", url]
+        self.assertEqual(report["command"], expected)
+        self.assertEqual(calls, [["/usr/bin/open", "-n", "-a", str(executable.parents[2]), "--args", *expected[1:]]])
+        self.assertEqual(report["log"], str(workflow.work / "logs/workspaces-launch.log"))
+        self.assertIsNone(report["pid"])
+        self.assertEqual(workflow.build_receipt_path(False).read_bytes(), receipt)
+        for name in ("development", "baseline", "packaging"):
+            self.assertFalse((workflow.work / "profiles" / name).exists())
+        self.assertEqual(workflow.launch_command(), [str(executable),
+                         "--user-data-dir=" + str(workflow.work / "profiles/development"),
+                         "--no-first-run", "--no-default-browser-check"])
+
+    def test_workspaces_cli_is_explicit_exclusive_and_does_not_accept_arbitrary_flags(self):
+        workflow = self.workflow()
+        with patch.object(workflow, "verified_executable") as verify:
+            for mode in ("baseline", "packaging"):
+                with self.subTest(mode=mode), self.assertRaisesRegex(openarc.WorkflowError, "mutually exclusive"):
+                    workflow.launch_command(workspaces=True, **{mode: True})
+            verify.assert_not_called()
+        self.assertFalse(workflow.work.exists())
+        with patch.object(openarc, "Workflow") as constructor, patch("sys.stderr"):
+            for arguments in (["launch", "--baseline", "--workspaces"],
+                              ["launch", "--packaging", "--workspaces"],
+                              ["build", "--workspaces"],
+                              ["launch", "--workspaces", "--disable-features=TabStripUnification"],
+                              ["launch", "--workspaces", "--user-data-dir=/existing-profile"]):
+                with self.subTest(arguments=arguments), self.assertRaises(SystemExit) as error:
+                    openarc.main(arguments)
+                self.assertEqual(error.exception.code, 2)
+            constructor.assert_not_called()
+            self.assertEqual(openarc.main(["launch", "--workspaces", "https://example.com/"]), 0)
+            constructor.return_value.launch.assert_called_once_with("https://example.com/", False, False, True)
+
+    def test_workspaces_launch_requires_normal_receipt_and_unchanged_inputs_and_binary(self):
+        self.repository()
+        workflow = self.workflow()
+        executable = self.executable(workflow, "OpenArc")
+        self.simulated_build(workflow)
+        normal_receipt = workflow.build_receipt_path(False)
+        receipt = normal_receipt.read_bytes()
+        normal_receipt.rename(workflow.build_receipt_path(False, packaging=True))
+        with self.assertRaisesRegex(openarc.WorkflowError, "successful build receipt"):
+            workflow.launch_command(workspaces=True)
+        normal_receipt.write_bytes(receipt)
+        for update, message in ((lambda value: value["inputs"].update(baseline=True), "does not match"),
+                                (lambda value: value["inputs"].update(packaging=True), "does not match"),
+                                (lambda value: value.update(output="out/Packaging"), "output does not match")):
+            changed = json.loads(receipt)
+            update(changed)
+            openarc.atomic_json(normal_receipt, changed)
+            with self.subTest(message=message), self.assertRaisesRegex(openarc.WorkflowError, message):
+                workflow.launch_command(workspaces=True)
+        normal_receipt.write_bytes(receipt)
+        executable.write_text("changed executable\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "executable or bundle identity changed"):
+            workflow.launch_command(workspaces=True)
+        self.assertFalse((workflow.work / "profiles/workspaces").exists())
+
+    def test_workspaces_launch_rejects_overlay_drift_before_launchservices(self):
+        self.repository()
+        self.source_overlay()
+        workflow = self.workflow()
+        workflow.apply()
+        self.executable(workflow, "OpenArc")
+        self.simulated_build(workflow)
+        (self.root / "src/openarc/workspace/core.h").write_text("// changed original\n")
+        real_run = subprocess.run
+
+        def no_launch(args, **kwargs):
+            if args[0] == "/usr/bin/open":
+                raise AssertionError("A stale overlay must never reach LaunchServices")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(openarc.subprocess, "run", side_effect=no_launch):
+            with self.assertRaisesRegex(openarc.WorkflowError, "overlay.*changed|differ|drift"):
+                workflow.launch(None, workspaces=True)
+        self.assertFalse((workflow.work / "profiles/workspaces").exists())
+
+    def test_workspaces_launch_preserves_promoted_development_output_and_receipt(self):
+        workflow, _ = self.baseline_for_promotion()
+        self.apply_identity(workflow)
+        executable = self.executable(workflow, "OpenArc", workflow.baseline_output)
+        self.simulated_build(workflow, reuse_baseline=True)
+        receipt = workflow.build_receipt_path(False).read_bytes()
+        promotion = workflow.promotion_file.read_bytes()
+        command = workflow.launch_command(workspaces=True)
+        self.assertEqual(command[0], str(executable))
+        self.assertIn("--user-data-dir=" + str(workflow.work / "profiles/workspaces"), command)
+        self.assertIn("--enable-features=OpenArcWorkspaces", command)
+        self.assertEqual(workflow.build_receipt_path(False).read_bytes(), receipt)
+        self.assertEqual(workflow.promotion_file.read_bytes(), promotion)
+        with self.assertRaisesRegex(openarc.WorkflowError, "promoted"):
+            workflow.launch_command(baseline=True)
+
+    def test_workspaces_profile_and_log_cannot_redirect_to_existing_data(self):
+        self.repository()
+        workflow = self.workflow()
+        self.executable(workflow, "OpenArc")
+        self.simulated_build(workflow)
+        protected = self.root / "existing-browser"
+        protected.mkdir()
+        marker = protected / "important-data"
+        marker.write_text("preserve")
+        profile = workflow.work / "profiles/workspaces"
+        profile.parent.mkdir()
+        profile.symlink_to(protected, target_is_directory=True)
+        with self.assertRaisesRegex(openarc.WorkflowError, "symlink"):
+            workflow.launch_command(workspaces=True)
+        profile.unlink()
+        log = workflow.work / "logs/workspaces-launch.log"
+        log.parent.mkdir()
+        log.symlink_to(marker)
+        real_run = subprocess.run
+
+        def no_launch(args, **kwargs):
+            if args[0] == "/usr/bin/open":
+                raise AssertionError("A redirected workspaces log must never reach LaunchServices")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "require_mac"), patch.object(openarc.subprocess, "run", side_effect=no_launch):
+            with self.assertRaisesRegex(openarc.WorkflowError, "symlink"):
+                workflow.launch(None, workspaces=True)
+        self.assertEqual(marker.read_text(), "preserve")
+        self.assertEqual(list(protected.iterdir()), [marker])
+
     def test_launchservices_is_not_invoked_for_unverified_binary_or_unsafe_url(self):
         self.repository()
         workflow = self.workflow()

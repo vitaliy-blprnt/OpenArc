@@ -814,14 +814,20 @@ class Workflow:
                                 + str(len(found)) + ". Preserve/review stale build outputs manually.")
         return found[0]
 
-    def launch_command(self, url: str | None = None, baseline: bool = False, packaging: bool = False) -> list[str]:
+    def launch_command(self, url: str | None = None, baseline: bool = False, packaging: bool = False,
+                       workspaces: bool = False) -> list[str]:
+        if sum((baseline, packaging, workspaces)) > 1:
+            raise WorkflowError("--baseline, --packaging and --workspaces are mutually exclusive")
         executable = self.verified_executable(baseline, packaging)
-        profile_name = "packaging" if packaging else ("baseline" if baseline else "development")
+        profile_name = ("workspaces" if workspaces else
+                        "packaging" if packaging else "baseline" if baseline else "development")
         profile = self.safe_path(self.work / "profiles" / profile_name)
         profile.mkdir(parents=True, exist_ok=True)
         args = [str(executable), "--user-data-dir=" + str(profile), "--no-first-run", "--no-default-browser-check"]
         if baseline:
             args.append("--use-mock-keychain")
+        if workspaces:
+            args.append("--enable-features=OpenArcWorkspaces")
         if url:
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -829,15 +835,17 @@ class Workflow:
             args.append(url)
         return args
 
-    def launch(self, url: str | None, baseline: bool = False, packaging: bool = False) -> None:
+    def launch(self, url: str | None, baseline: bool = False, packaging: bool = False,
+               workspaces: bool = False) -> None:
         self.require_mac()
-        args = self.launch_command(url, baseline, packaging)
+        args = self.launch_command(url, baseline, packaging, workspaces)
         bundle = self.safe_path(Path(args[0]).parents[2])
         # Use the exact verified bundle, not its shared display name/bundle ID.
         # -n ensures LaunchServices passes the isolated profile arguments to a
         # new app instance rather than activating a differently launched one.
         launch_args = ["/usr/bin/open", "-n", "-a", str(bundle), "--args", *args[1:]]
-        log_name = "packaging-launch.log" if packaging else ("baseline-launch.log" if baseline else "launch.log")
+        log_name = ("workspaces-launch.log" if workspaces else "packaging-launch.log" if packaging else
+                    "baseline-launch.log" if baseline else "launch.log")
         log_path = self.safe_path(self.work / "logs" / log_name)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
@@ -897,13 +905,14 @@ def main(argv: list[str] | None = None) -> int:
     launch_modes = launch.add_mutually_exclusive_group()
     launch_modes.add_argument("--baseline", action="store_true", help="Launch out/Baseline with a separate baseline profile")
     launch_modes.add_argument("--packaging", action="store_true", help="Launch the verified out/Packaging candidate with a separate packaging profile")
+    launch_modes.add_argument("--workspaces", action="store_true", help="Opt into OpenArcWorkspaces in the verified development build with a separate workspaces profile")
     args = parser.parse_args(argv)
     try:
         workflow = Workflow(Path(__file__).resolve().parent.parent)
         if args.command == "build":
             workflow.build(args.jobs, args.baseline, args.reuse_baseline, args.packaging)
         elif args.command == "launch":
-            workflow.launch(args.url, args.baseline, args.packaging)
+            workflow.launch(args.url, args.baseline, args.packaging, args.workspaces)
         elif args.command == "check":
             workflow.check(args.checkout)
         else:

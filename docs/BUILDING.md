@@ -252,6 +252,8 @@ The tooling keeps its workspace under the repository's `.build` directory:
 | `.build/chromium/src` | Chromium source and dependency checkout |
 | `.build/chromium/src/out/OpenArc` | Default development build output |
 | `.build/profiles/development` | Isolated development browser data |
+| `.build/profiles/workspaces` | Separate development data for workspace-feature verification |
+| `.build/logs/workspaces-launch.log` | Workspace-development LaunchServices diagnostics |
 | `.build/chromium/src/out/Baseline` | Unmodified baseline output, or explicitly promoted incremental OpenArc output |
 | `.build/profiles/baseline` | Isolated baseline browser data |
 | `.build/baseline-promotion.json` | Promoted output ownership and historical baseline receipt |
@@ -289,6 +291,20 @@ new source evidence. These development checks do not replace release signing.
 Never replace the development profile with a link to a Chrome, Arc, Chromium,
 or daily-use OpenArc profile. Chromium owns its data compatibility, while future
 OpenArc metadata has its own migration requirements.
+
+To opt into the default-off workspace sidebar for development verification:
+
+```sh
+python3 scripts/openarc.py launch --workspaces https://example.com/
+```
+
+This uses the same verified development build receipt and a separate
+`.build/profiles/workspaces` profile. It enables only `OpenArcWorkspaces`,
+preserving Chromium's other feature defaults, and writes launcher diagnostics to
+`.build/logs/workspaces-launch.log`. It cannot be combined with `--baseline` or
+`--packaging`. The feature's current implementation and qualification limits are
+recorded in [STATUS.md](STATUS.md); a successful launch request is not evidence
+of working sidebar behavior.
 
 On macOS the launcher calls `/usr/bin/open -n -a` with the exact verified `.app`
 path and passes the complete isolated-profile argument list after `--args`.
