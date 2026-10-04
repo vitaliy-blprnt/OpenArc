@@ -93,7 +93,7 @@ class WorkflowTests(unittest.TestCase):
             return real_run(args, **kwargs)
 
         with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
-                patch.object(workflow, "run", side_effect=runner):
+                patch.object(workflow, "ensure_bootstrap"), patch.object(workflow, "run", side_effect=runner):
             workflow.build(2, baseline)
 
     def add_dependency(self, repo):
@@ -287,7 +287,8 @@ class WorkflowTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
-                patch.object(workflow, "assert_pin"), patch.object(workflow, "run", side_effect=fake_run):
+                patch.object(workflow, "assert_pin"), patch.object(workflow, "ensure_bootstrap"), \
+                patch.object(workflow, "run", side_effect=fake_run):
             workflow.build(3)
         gn = next(args for args, _ in calls if args[0] == str(workflow.depot / "gn"))
         ninja = next(args for args, _ in calls if args[0] == str(workflow.depot / "autoninja"))
@@ -372,7 +373,7 @@ class WorkflowTests(unittest.TestCase):
             return real_run(args, **kwargs)
 
         with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"), \
-                patch.object(workflow, "run", side_effect=fail_compilation):
+                patch.object(workflow, "ensure_bootstrap"), patch.object(workflow, "run", side_effect=fail_compilation):
             with self.assertRaisesRegex(openarc.WorkflowError, "simulated GN failure"):
                 workflow.build(2)
         self.assertTrue(executable.exists())
@@ -416,6 +417,79 @@ class WorkflowTests(unittest.TestCase):
         with patch.object(workflow, "require_mac"), patch.object(workflow, "ensure_space"):
             with self.assertRaisesRegex(openarc.WorkflowError, "Missing dependency directory"):
                 workflow.build(2)
+
+    def test_gclient_packaged_dependency_names_use_directory_before_colon(self):
+        repo = self.repository()
+        # Formats emitted by the locked depot_tools GcsDependency and
+        # CipdDependency, observed in a successful actual Chromium sync.
+        gcs_name = "src/base/tracing/test/data:test_data/chrome_5672_histograms.pftrace.gz-a09bd44078ac71bcfbc901b0544750e8344d0d0f6f96e220f700a5a53fa932ee"
+        cipd_name = "src/buildtools/mac:gn/gn/mac-${arch}"
+        entries = {
+            "src": openarc.CHROMIUM_URL,
+            gcs_name: "gs://perfetto/test_data/chrome_5672_histograms.pftrace.gz-a09bd44078ac71bcfbc901b0544750e8344d0d0f6f96e220f700a5a53fa932ee",
+            cipd_name: "https://chrome-infra-packages.appspot.com/gn/gn/mac-${arch}@git_revision:150a9d6ba0aa7f407aa4feeabc5f03ce9aa7e04b",
+        }
+        for directory in ("base/tracing/test/data", "buildtools/mac"):
+            (repo / directory).mkdir(parents=True)
+        (repo.parent / ".gclient_entries").write_text("entries = " + repr(entries) + "\n")
+        workflow = self.workflow()
+        evidence = workflow.dependency_evidence()
+        self.assertEqual(evidence["entries"], entries)
+        self.assertEqual(evidence["git_revisions"], {})
+        self.assertEqual(workflow.dependency_repos(), [])
+        self.assertFalse((repo.parent / gcs_name).exists())
+        self.assertFalse((repo.parent / cipd_name).exists())
+
+    def test_packaged_dependency_cannot_escape_managed_checkout(self):
+        repo = self.repository()
+        (repo.parent / ".gclient_entries").write_text("entries = " + repr({
+            "../elsewhere:package": "gs://bucket/package"}) + "\n")
+        with self.assertRaisesRegex(openarc.WorkflowError, "must not be absolute or contain"):
+            self.workflow().dependency_evidence()
+
+    def test_bootstrap_uses_absolute_pinned_script_and_verifies_python(self):
+        self.repository()
+        workflow = self.workflow()
+        calls = []
+        real_run = workflow.run
+
+        def runner(args, **kwargs):
+            calls.append((args, kwargs))
+            if args[0] == str(workflow.depot / "ensure_bootstrap"):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if args[0] == str(workflow.depot / "python-bin/python3"):
+                return subprocess.CompletedProcess(args, 0, "Python 3.11.8\n", "")
+            return real_run(args, **kwargs)
+
+        with patch.object(workflow, "run", side_effect=runner):
+            workflow.bootstrap()
+        self.assertIn(([str(workflow.depot / "ensure_bootstrap")], {"cwd": workflow.depot}), calls)
+        self.assertTrue(Path(str(workflow.depot / "ensure_bootstrap")).is_absolute())
+        self.assertEqual(workflow.env["DEPOT_TOOLS_UPDATE"], "0")
+        self.assertEqual(workflow.env["DEPOT_TOOLS_DIR"], str(workflow.depot))
+        self.assertEqual(workflow.env["DEPOT_TOOLS_BOOTSTRAP_PYTHON3"], "1")
+
+    def test_successful_upstream_bootstrap_exit_without_working_python_is_failure(self):
+        self.repository()
+        workflow = self.workflow()
+
+        def runner(args, **kwargs):
+            if args[0] == str(workflow.depot / "python-bin/python3"):
+                raise openarc.WorkflowError("python3_bin_reldir.txt not found")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with patch.object(workflow, "run", side_effect=runner):
+            with self.assertRaisesRegex(openarc.WorkflowError, "python3_bin_reldir"):
+                workflow.ensure_bootstrap()
+
+    def test_fetch_bootstraps_before_fetching_chromium(self):
+        workflow = self.workflow()
+        actions = []
+        with patch.object(workflow, "ensure_space"), \
+                patch.object(workflow, "checkout_repo", side_effect=lambda path, component: actions.append(component)), \
+                patch.object(workflow, "ensure_bootstrap", side_effect=lambda: actions.append("bootstrap")):
+            workflow.fetch()
+        self.assertEqual(actions, ["depot_tools", "bootstrap", "chromium"])
 
 
 if __name__ == "__main__":

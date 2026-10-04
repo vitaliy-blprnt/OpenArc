@@ -1,0 +1,32 @@
+:root { color-scheme: light dark; font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --bg:#f4f3ef; --panel:#fffefa; --text:#202b29; --muted:#586762; --line:#d7ddd7; --accent:#245e4e; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); }
+main { max-width:1040px; margin:48px auto; padding:0 28px; }
+h1 { font-size:30px; letter-spacing:-.035em; line-height:1.2; margin:8px 0 16px; }
+h2 { font-size:18px; margin:0 0 12px; }
+p { margin:8px 0 16px; }
+.eyebrow { font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:var(--accent); font-weight:700; }
+.intro { max-width:760px; color:var(--muted); }
+section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px; margin:24px 0; }
+.actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+button { border:1px solid var(--accent); border-radius:7px; background:var(--accent); color:white; padding:10px 16px; font:inherit; font-weight:600; cursor:pointer; }
+button.secondary { color:var(--text); background:transparent; border-color:var(--line); }
+button:disabled { opacity:.45; cursor:not-allowed; }
+button:focus-visible, input:focus-visible { outline:3px solid #a78431; outline-offset:3px; }
+.consent { display:flex; gap:9px; align-items:center; font-weight:600; }
+input[type=checkbox] { width:18px; height:18px; accent-color:var(--accent); }
+.status { padding:14px 18px; border-left:3px solid var(--accent); background:var(--panel); }
+table { width:100%; border-collapse:collapse; text-align:left; font-size:14px; }
+th, td { padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:600; }
+td:nth-child(2) { width:100px; font-weight:700; }
+tr[data-state=fail] td:nth-child(2), tr[data-state=blocked] td:nth-child(2) { color:#b33925; }
+tr[data-state=pass] td:nth-child(2) { color:var(--accent); }
+code { font-size:.9em; overflow-wrap:anywhere; }
+li { margin-bottom:8px; }
+.compact { padding:24px; }
+.compact h1 { font-size:22px; }
+.popup { width:320px; }
+.popup button { display:block; width:100%; margin-top:10px; }
+@media (prefers-color-scheme:dark) { :root { --bg:#18201e; --panel:#212b27; --text:#e8eee9; --muted:#acbbb1; --line:#3d4d44; --accent:#a2d3bb; } button { color:#18201e; } tr[data-state=fail] td:nth-child(2), tr[data-state=blocked] td:nth-child(2) { color:#ffad9b; } }
+@media (max-width:650px) { main { margin:24px auto; padding:0 14px; } section { padding:16px; } table { font-size:12px; } }

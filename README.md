@@ -42,6 +42,7 @@ not an official signed release. Existing Chrome and Arc profiles are not used.
 - [Arc interaction research](docs/research/arc-interactions.md): first-party UX research and visual references.
 - [Chromium foundations](docs/research/chromium-foundations.md): technical options, compatibility, and maintenance requirements.
 - [Extension compatibility gate](docs/EXTENSION-COMPATIBILITY.md): required platform and native-integration checks.
+- [Extension platform probe](docs/EXTENSION-PROBE.md): isolated MV3 API checks and a synthetic native-messaging host.
 - [Contributing](CONTRIBUTING.md), [security policy](SECURITY.md), and [release process](docs/RELEASING.md).
 
 ## License and attribution

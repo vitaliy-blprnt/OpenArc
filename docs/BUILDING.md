@@ -29,6 +29,7 @@ Run from the OpenArc repository root:
 python3 scripts/openarc.py --help
 python3 scripts/openarc.py check
 python3 -m unittest discover -s tests/tooling -v
+node --test tests/extensions/platform-probe/scope.test.mjs
 python3 scripts/openarc.py doctor
 ```
 
@@ -39,6 +40,9 @@ SDK, unsupported host, or inadequate disk headroom returns a failure. The curren
 free-space floors are 20 GiB for `fetch` and 40 GiB for `sync`/`build`, not guarantees
 that the complete source and build will fit. These checks do not compile or run
 browser code.
+
+The optional extension-fixture checks require Node.js 24 or later. The Chromium
+build itself uses the tools supplied by its dependency checkout.
 
 After fetching, `python3 scripts/openarc.py check --checkout` also verifies the
 source revision and recorded applied-patch state. The default `check` stays
@@ -58,7 +62,8 @@ python3 scripts/openarc.py build
 
 The sequence is:
 
-1. `fetch` bootstraps the pinned depot_tools and Chromium source.
+1. `fetch` checks out pinned depot_tools, explicitly bootstraps its tools, and
+   fetches the pinned Chromium source.
 2. `sync` resolves Chromium's pinned dependencies and runs its hooks.
 3. `apply` applies OpenArc's ordered integration patches. An empty series builds
    the upstream baseline; it does not implement the planned OpenArc interface.
@@ -79,6 +84,12 @@ patch series. Do not reverse or discard local changes merely to rerun a baseline
 Baseline launch uses Chromium's mock Keychain so it cannot access an existing
 Chromium Safe Storage entry. Use synthetic browsing data only in that mode; it
 does not qualify credential storage or native password-manager integration.
+
+Pinning depot_tools disables automatic updates, including its implicit bootstrap.
+The workflow explicitly invokes the pinned `ensure_bootstrap` script and checks
+that its Python launcher works. To repair an already fetched checkout independently
+of a source download, run `python3 scripts/openarc.py bootstrap`. `sync` and
+`build` also ensure this setup is present before invoking their upstream tools.
 
 The exact upstream revisions and GN arguments live in [`upstream.lock`](../upstream.lock).
 The initial configuration targets `arm64`, uses a non-debug component build, sets
@@ -139,6 +150,9 @@ extension installation/runtime/update behavior, native messaging, and recovery
 results. Include the OpenArc commit, exact Chromium revision, architecture,
 toolchain, and build arguments with each result. Run the focused upstream and
 OpenArc browser tests required by the changed behavior.
+
+The [extension platform probe](EXTENSION-PROBE.md) provides an unpacked MV3
+fixture and an optional synthetic native host for the isolated profiles.
 
 An extension that loads in an unsigned local build has not necessarily passed
 native password-manager trust in the final signed app. A finite test suite is not

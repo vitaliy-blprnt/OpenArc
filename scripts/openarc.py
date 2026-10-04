@@ -104,6 +104,8 @@ class Workflow:
         self.env["PATH"] = str(self.depot) + os.pathsep + self.env.get("PATH", "")
         self.env["DEPOT_TOOLS_UPDATE"] = "0"
         self.env["DEPOT_TOOLS_METRICS"] = "0"
+        self.env["DEPOT_TOOLS_DIR"] = str(self.depot)
+        self.env["DEPOT_TOOLS_BOOTSTRAP_PYTHON3"] = "1"
 
     def safe_path(self, path: Path) -> Path:
         """Refuse paths escaping the project or redirected through symlinks."""
@@ -245,8 +247,28 @@ class Workflow:
             if (path / ".git").exists():
                 self.assert_clean(path)
         self.checkout_repo(self.depot, "depot_tools")
+        self.ensure_bootstrap()
         self.checkout_repo(self.src, "chromium")
         print("Pinned source checkouts ready. Run sync to fetch dependencies and run hooks.")
+
+    def ensure_bootstrap(self) -> None:
+        # DEPOT_TOOLS_UPDATE=0 intentionally disables gclient's implicit update
+        # and bootstrap. Upstream ensure_bootstrap installs the pinned tooling
+        # dependencies without updating its Git checkout. Its path must be
+        # absolute because bootstrap_python3 changes the working directory.
+        self.run([str(self.depot / "ensure_bootstrap")], cwd=self.depot)
+        # The upstream shell script can exit successfully after a package error,
+        # so verify the Python launcher actually used by GN, not only a marker.
+        result = self.run([str(self.depot / "python-bin" / "python3"), "--version"],
+                          cwd=self.depot, capture=True)
+        if not re.fullmatch(r"Python 3\.\d+\.\d+(?:\S*)", result.stdout.strip()):
+            raise WorkflowError("depot_tools bootstrap did not produce a working Python 3 launcher")
+        self.assert_pin(self.depot, "depot_tools")
+
+    def bootstrap(self) -> None:
+        self.assert_pin(self.depot, "depot_tools")
+        self.assert_clean(self.depot)
+        self.ensure_bootstrap()
 
     def dependency_entries(self, required: bool = False) -> dict:
         entries = self.safe_path(self.checkout / ".gclient_entries")
@@ -264,21 +286,37 @@ class Workflow:
         except (OSError, ValueError, SyntaxError, StopIteration) as exc:
             raise WorkflowError(f"Cannot safely inspect .gclient_entries: {exc}") from exc
         for name, value in mapping.items():
-            path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
-            if value is not None and not isinstance(value, str):
-                raise WorkflowError(f"Invalid dependency inventory entry: {name}")
+            path, kind = self.dependency_location(name, value)
             if required and value is not None:
                 if not path.is_dir():
                     raise WorkflowError(f"Missing dependency directory: {name}; finish sync")
-                if value.split("@", 1)[0].rstrip("/").endswith(".git") and not (path / ".git").exists():
+                if kind == "git" and not (path / ".git").exists():
                     raise WorkflowError(f"Missing Git dependency checkout: {name}; finish sync")
         return mapping
 
+    def dependency_location(self, name: str, value: str | None) -> tuple[Path, str]:
+        if not isinstance(name, str) or (value is not None and not isinstance(value, str)):
+            raise WorkflowError(f"Invalid dependency inventory entry: {name}")
+        # gclient._SaveEntries serializes dependency.name, not a filesystem path.
+        # GcsDependency uses '<directory>:<object_name>'; CipdDependency uses
+        # '<directory>:<package>'. Both install into the directory before ':'.
+        directory, separator, package = name.partition(":")
+        kind = "git" if value is not None else "disabled"
+        if separator:
+            parsed = urlparse(value) if value is not None else None
+            if not package or (parsed is not None and not (
+                    parsed.scheme == "gs" or (parsed.scheme == "https"
+                                              and parsed.netloc == "chrome-infra-packages.appspot.com"))):
+                raise WorkflowError(f"Unrecognized packaged dependency entry: {name}")
+            kind = "package" if value is not None else "disabled"
+        path = self.safe_path(self.checkout / relative_path(directory, "dependency path"))
+        return path, kind
+
     def dependency_repos(self) -> list[Path]:
         repos = []
-        for name in self.dependency_entries():
-            path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
-            if (path / ".git").exists() and path != self.src:
+        for name, value in self.dependency_entries().items():
+            path, kind = self.dependency_location(name, value)
+            if kind == "git" and (path / ".git").exists() and path != self.src:
                 repos.append(path)
         return repos
 
@@ -288,8 +326,8 @@ class Workflow:
         for name, value in sorted(entries.items()):
             if value is None:
                 continue
-            path = self.safe_path(self.checkout / relative_path(name, "dependency path"))
-            if path != self.src and (path / ".git").exists():
+            path, kind = self.dependency_location(name, value)
+            if kind == "git" and path != self.src and (path / ".git").exists():
                 self.assert_clean(path)
                 revisions[name] = self.revision(path)
         return {"entries": entries, "git_revisions": revisions}
@@ -300,6 +338,7 @@ class Workflow:
         self.assert_pin(self.src, "chromium")
         for repo in [self.depot, self.src, *self.dependency_repos()]:
             self.assert_clean(repo)
+        self.ensure_bootstrap()
         configuration = ("solutions = " + repr([{"name": "src", "url": CHROMIUM_URL,
                          "managed": False, "custom_deps": {}, "custom_vars": {
                              "checkout_pgo_profiles": self.lock["build"]["gn_args"].get("chrome_pgo_phase", 0) != 0}}])
@@ -422,6 +461,7 @@ class Workflow:
         # Once compilation starts, an earlier success must not qualify binaries
         # left behind by a failed or interrupted rebuild.
         receipt_path.unlink(missing_ok=True)
+        self.ensure_bootstrap()
         self.run([str(self.depot / "gn"), "gen", output_relative, "--args=" + args], cwd=self.src)
         self.run([str(self.depot / "autoninja"), "-C", output_relative, "-j", str(jobs), "chrome"], cwd=self.src)
         if self.build_inputs(baseline) != inputs:
@@ -500,7 +540,7 @@ class Workflow:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("doctor", "fetch", "sync", "apply"):
+    for name in ("doctor", "fetch", "bootstrap", "sync", "apply"):
         commands.add_parser(name)
     check = commands.add_parser("check")
     check.add_argument("--checkout", action="store_true", help="Also validate the existing checkout and recorded patch state")

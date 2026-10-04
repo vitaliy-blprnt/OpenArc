@@ -5,8 +5,10 @@ Updated 3 October 2026. This file records evidence, not inferred completion.
 ## Current checkpoint
 
 M0 is in progress. Repository tooling, community files, license, and the initial
-source patch series have been created. The pinned Chromium source has been fetched;
-dependency acquisition is in progress. No browser binary has been compiled or run yet.
+source patch series have been created. The pinned Chromium source and dependencies
+have been fetched and their setup hooks completed. Dependency-inventory and
+depot_tools bootstrap setup issues were corrected; GN generation passed and the
+unmodified Chromium baseline is compiling. No browser binary has been run yet.
 
 ## Pinned baseline
 
@@ -30,10 +32,11 @@ does not promise this revision remains current after this checkpoint.
 | Host/toolchain preflight | Passed for attempting a development build |
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
 | Identity and vertical-tab patches against exact upstream source files | Apply/reverse and XML checks passed; compilation pending |
-| Tooling test suite | 29 tests passed locally, including stale-build, dependency-state, and baseline Keychain safeguards |
+| Tooling test suite | 46 tests passed locally, including build provenance, dependency inventory/bootstrap, and synthetic native-host safeguards |
+| Extension fixture scope guards | 12 Node tests passed; no Chrome APIs executed |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `4198de7` ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175047805)) |
-| Chromium baseline build | Not run |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `9ff6d0b` ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175254022)) |
+| Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
 | Visible browser UI | Not tested |
 | Chrome Web Store / extension runtime / native integration | Not tested |
