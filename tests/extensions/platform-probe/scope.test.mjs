@@ -104,6 +104,22 @@ test("native success sends one challenge and closes the port and timer", async (
   harness.closed();
 });
 
+test("native default timers preserve the global receiver required by browser timers", async (context) => {
+  const harness = nativeHarness();
+  context.mock.method(globalThis, "setTimeout", function (callback, ms) {
+    assert.equal(this, globalThis, "browser timer must receive the global object");
+    return harness.timers.setTimeout(callback, ms);
+  });
+  context.mock.method(globalThis, "clearTimeout", function (id) {
+    assert.equal(this, globalThis, "browser timer cleanup must receive the global object");
+    return harness.timers.clearTimeout(id);
+  });
+  const result = checkNativeHost(harness.runtime, run);
+  harness.port.onMessage.emit({type: "pong", nonce: run, protocol: 1});
+  await result;
+  harness.closed();
+});
+
 test("native timeout disconnects and a late valid response cannot pass", async () => {
   const harness = nativeHarness();
   const result = checkNativeHost(harness.runtime, run, harness.timers);

@@ -66,10 +66,22 @@ python3 scripts/native_probe.py install --baseline --extension-id YOUR_EXTENSION
 ```
 
 For the normal development mode, substitute `--development` for `--baseline`.
-The installer targets only `.build/profiles/baseline/NativeMessagingHosts` or
-`.build/profiles/development/NativeMessagingHosts`; it does not register a host in
-system or daily-use browser locations. Host discovery in the actual built browser
-still needs verification.
+Those modes target `.build/profiles/baseline/NativeMessagingHosts` and
+`.build/profiles/development/NativeMessagingHosts` respectively. The optional
+`--reference` mode targets only
+`.build/profiles/fixture-reference/NativeMessagingHosts`. No mode registers a host
+in system or daily-use browser locations. Host discovery in the actual built
+browser still needs verification.
+
+To validate the fixture against a separately installed Chromium-based reference
+browser, launch it with this repository's absolute
+`.build/profiles/fixture-reference` path as its dedicated `--user-data-dir` and
+`--use-mock-keychain` for synthetic data. Verify the command line and profile
+path in `chrome://version` before loading the fixture. Then use `install --reference` and
+`uninstall --reference` with the fixture ID from that profile. Record the actual
+reference-browser version separately. A passing reference-browser exchange
+validates only the fixture's synthetic transport in that browser; it does **not**
+qualify OpenArc, its signed identity, or password-manager vendor integration.
 
 On the dashboard, click **Check synthetic native host**. A pass requires exactly
 `{type: "pong", nonce: <the request nonce>, protocol: 1}` from

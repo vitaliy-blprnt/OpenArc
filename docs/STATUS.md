@@ -8,7 +8,9 @@ M0 is in progress. Repository tooling, community files, license, and the initial
 source patch series have been created. The pinned Chromium source and dependencies
 have been fetched and their setup hooks completed. Dependency-inventory and
 depot_tools bootstrap setup issues were corrected; GN generation passed and the
-unmodified Chromium baseline is compiling. No browser binary has been run yet.
+unmodified Chromium baseline is compiling. No locally built browser binary has
+been run yet. The diagnostic extension has been exercised separately in an
+installed reference Chrome using an isolated synthetic-data profile.
 
 ## Pinned baseline
 
@@ -32,19 +34,27 @@ does not promise this revision remains current after this checkpoint.
 | Host/toolchain preflight | Passed for attempting a development build |
 | Original-code license and community guidance | Written; private vulnerability reporting verified enabled on the canonical repository |
 | Identity, vertical-tab, and AI-default patches against exact upstream source files | Three-patch apply/reverse and XML checks passed; compilation pending |
-| Tooling test suite | 46 tests passed locally, including build provenance, dependency inventory/bootstrap, and synthetic native-host safeguards |
-| Extension fixture scope guards | 12 Node tests passed; no Chrome APIs executed |
+| Tooling test suite | 48 tests passed locally, including build provenance, dependency inventory/bootstrap, and isolated reference native-host safeguards |
+| Extension fixture scope guards | 13 Node tests passed; includes regression for native browser timer receiver binding |
 | Public GitHub repository | Published: [vitaliy-blprnt/OpenArc](https://github.com/vitaliy-blprnt/OpenArc) |
-| Hosted source checks | Passed on Linux/macOS for checkpoint `67ead1a`, including Python and Node probe tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175860909)) |
+| Hosted source checks | Passed on Linux/macOS for checkpoint `18f1967`, including Python and Node probe tests ([run](https://github.com/vitaliy-blprnt/OpenArc/actions/runs/37175998861)); later local test additions are not implied by that run |
 | Chromium baseline build | GN generation passed; compilation in progress |
 | OpenArc patched build | Not run |
-| Visible browser UI | Not tested |
-| Chrome Web Store / extension runtime / native integration | Not tested |
+| Visible OpenArc browser UI | Not tested |
+| Reference-browser fixture | 19 API checks and synthetic native nonce/pong exchange passed in installed Chrome 154.0.8037.59 (ARM64), with mock Keychain and a dedicated profile; popup rendering, user-gesture side panel, side-panel dashboard action, and Options entry observed |
+| OpenArc Chrome Web Store / extension runtime / native integration | Not tested; reference-browser fixture results do not qualify OpenArc |
 | Arc-style saved tabs and Spaces | Not implemented |
 | Signed release and updater | Not implemented |
 
 The existing extension inventory is local-only under ignored build artifacts.
 It is not part of public source or public evidence.
+
+The reference run exposed a browser-only timer receiver bug in the probe, fixed
+and retested with an exact native reply. Its JSON report is local under ignored
+build artifacts. The synthetic native host was unregistered after the run and
+the dedicated test process stopped. No credential or vendor-trust tests were
+performed. The popup's dashboard action and visible context-menu interaction
+remain unverified; their API configuration checks do not replace those actions.
 
 ## Milestones
 

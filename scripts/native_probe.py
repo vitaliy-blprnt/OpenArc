@@ -22,6 +22,8 @@ MAX_MESSAGE_BYTES = 4096
 MAX_NONCE_BYTES = 128
 EXTENSION_ID = re.compile(r"[a-p]{32}\Z")
 HEADER = struct.Struct("=I")  # Native byte order, exactly four bytes.
+PROFILE_DIRECTORIES = {"baseline": "baseline", "development": "development",
+                       "reference": "fixture-reference"}
 
 
 class ProbeError(Exception):
@@ -109,8 +111,8 @@ def host_main(reader: BinaryIO, writer: BinaryIO, errors: TextIO) -> int:
 
 class Installer:
     def __init__(self, root: Path, mode: str, extension_id: str):
-        if mode not in ("baseline", "development"):
-            raise ProbeError("Mode must be baseline or development")
+        if mode not in PROFILE_DIRECTORIES:
+            raise ProbeError("Mode must be baseline, development or reference")
         if not EXTENSION_ID.fullmatch(extension_id):
             raise ProbeError("Extension ID must contain exactly 32 lowercase letters a through p")
         self.root = root.resolve()
@@ -121,7 +123,8 @@ class Installer:
                 or not self.host_script.is_file() or not self.host_script.resolve().is_relative_to(self.root)):
             raise ProbeError("Expected a regular tracked scripts/native_probe.py")
         self.wrapper = self.safe(self.build / "tools" / ("native-probe-" + mode))
-        self.manifest = self.safe(self.build / "profiles" / mode / "NativeMessagingHosts" / (HOST_NAME + ".json"))
+        self.manifest = self.safe(self.build / "profiles" / PROFILE_DIRECTORIES[mode] /
+                                  "NativeMessagingHosts" / (HOST_NAME + ".json"))
         identity = "\n".join((str(self.root), str(self.host_script), sys.executable, mode))
         owner = hashlib.sha256(identity.encode()).hexdigest()
         self.wrapper_text = ("#!/bin/sh\n# OpenArc-owned synthetic native probe v1 " + owner + "\n"
@@ -197,7 +200,7 @@ class Installer:
         self.create_owned(self.manifest, self.manifest_text, 0o600)
         return {"action": "installed", "mode": self.mode, "manifest": str(self.manifest),
                 "wrapper": str(self.wrapper), "allowed_origins": self.manifest_data["allowed_origins"],
-                "qualification": "Synthetic transport probe only. Browser host discovery and transport are unverified; this does not qualify password-manager vendor trust or credentials."}
+                "qualification": "Synthetic transport probe only. Browser host discovery and transport are unverified; reference-browser results do not qualify OpenArc. This does not qualify password-manager vendor trust or credentials."}
 
     def uninstall(self) -> dict:
         targets = [(self.manifest, self.manifest_text), (self.wrapper, self.wrapper_text)]
@@ -215,15 +218,15 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("install", "uninstall"):
         command = commands.add_parser(name)
         modes = command.add_mutually_exclusive_group(required=True)
-        modes.add_argument("--baseline", action="store_true")
-        modes.add_argument("--development", action="store_true")
+        for mode in PROFILE_DIRECTORIES:
+            modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
         command.add_argument("--extension-id", required=True)
     args = parser.parse_args(argv)
     if args.command == "host":
         return host_main(sys.stdin.buffer, sys.stdout.buffer, sys.stderr)
     try:
         installer = Installer(Path(__file__).resolve().parent.parent,
-                              "baseline" if args.baseline else "development", args.extension_id)
+                              args.mode, args.extension_id)
         print(json.dumps(getattr(installer, args.command)(), indent=2))
         return 0
     except (ProbeError, OSError) as exc:

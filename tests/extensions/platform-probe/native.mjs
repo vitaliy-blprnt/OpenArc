@@ -8,7 +8,12 @@ function nativeFailure(error) {
     : new ProbeError("Synthetic native connection failed or closed before a valid reply; raw error details are withheld.");
 }
 
-export async function checkNativeHost(runtime, nonce, timers = {setTimeout, clearTimeout}) {
+export async function checkNativeHost(runtime, nonce, timers = {
+  // Browser timers require their Window receiver; do not invoke copied methods
+  // with this adapter object as `this`.
+  setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay),
+  clearTimeout: (id) => globalThis.clearTimeout(id),
+}) {
   let port;
   let timeout;
   let onMessage;

@@ -91,13 +91,14 @@ class InstallerTests(unittest.TestCase):
         return probe.Installer(self.root, mode, extension_id)
 
     def test_install_is_scoped_idempotent_and_exact_origin_only(self):
-        for mode in ("baseline", "development"):
+        for mode, directory in (("baseline", "baseline"), ("development", "development"),
+                                ("reference", "fixture-reference")):
             installer = self.installer(mode)
             report = installer.install()
             before = installer.manifest.read_bytes()
             installer.install()
             self.assertEqual(installer.manifest.read_bytes(), before)
-            self.assertEqual(installer.manifest, self.root / ".build/profiles" / mode /
+            self.assertEqual(installer.manifest, self.root / ".build/profiles" / directory /
                              "NativeMessagingHosts/org.openarc.platform_probe.json")
             manifest = json.loads(before)
             self.assertEqual(manifest["allowed_origins"], ["chrome-extension://" + EXTENSION_ID + "/"])
@@ -105,6 +106,48 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(os.access(installer.wrapper, os.X_OK))
             self.assertIn("unverified", report["qualification"])
             self.assertFalse((self.root / "Library").exists())
+
+    def test_reference_cli_preserves_other_profiles_and_unrelated_reference_data(self):
+        preserved = []
+        for directory in ("baseline", "development"):
+            path = self.root / ".build/profiles" / directory / "NativeMessagingHosts" / (probe.HOST_NAME + ".json")
+            path.parent.mkdir(parents=True)
+            path.write_text("another registration")
+            preserved.append(path)
+        unrelated = self.root / ".build/profiles/fixture-reference/Preferences"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("reference browser data")
+        script = self.root / "scripts/native_probe.py"
+        installed = subprocess.run([sys.executable, str(script), "install", "--reference",
+                                    "--extension-id", EXTENSION_ID], capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        report = json.loads(installed.stdout)
+        manifest = self.root / ".build/profiles/fixture-reference/NativeMessagingHosts" / (probe.HOST_NAME + ".json")
+        wrapper = self.root / ".build/tools/native-probe-reference"
+        self.assertEqual(report["mode"], "reference")
+        self.assertEqual(report["manifest"], str(manifest))
+        self.assertEqual(report["wrapper"], str(wrapper))
+        self.assertTrue(manifest.is_file())
+        self.assertTrue(wrapper.is_file())
+        self.assertFalse((self.root / ".build/profiles/reference").exists())
+        self.assertIn("do not qualify OpenArc", report["qualification"])
+        removed = subprocess.run([sys.executable, str(script), "uninstall", "--reference",
+                                  "--extension-id", EXTENSION_ID], capture_output=True, text=True)
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertEqual(set(json.loads(removed.stdout)["removed"]), {str(manifest), str(wrapper)})
+        self.assertEqual(unrelated.read_text(), "reference browser data")
+        for path in preserved:
+            self.assertEqual(path.read_text(), "another registration")
+        self.assertFalse((self.root / "Library").exists())
+
+    def test_reference_profile_symlink_cannot_redirect_registration(self):
+        baseline = self.root / ".build/profiles/baseline"
+        baseline.mkdir(parents=True)
+        (baseline.parent / "fixture-reference").symlink_to(baseline, target_is_directory=True)
+        with self.assertRaisesRegex(probe.ProbeError, "symlink"):
+            self.installer("reference").install()
+        self.assertFalse((baseline / "NativeMessagingHosts").exists())
+        self.assertFalse((self.root / ".build/tools").exists())
 
     def test_uninstall_removes_only_matching_owned_files(self):
         installer = self.installer()
