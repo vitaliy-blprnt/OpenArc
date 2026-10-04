@@ -1,0 +1,24 @@
+# Copyright 2026 OpenArc contributors. SPDX-License-Identifier: BSD-3-Clause
+
+# Prepared targets only. No Chromium overlay, patch, or browser dependency loads
+# this file yet. A future overlay must place openarc/ at the Chromium source
+# root.
+source_set("association_reconciler") {
+  sources = [
+    "association_reconciler.cc",
+    "association_reconciler.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/sessions:session_id",
+  ]
+}
+
+source_set("association_reconciler_unittests") {
+  testonly = true
+  sources = [ "association_reconciler_unittest.cc" ]
+  deps = [
+    ":association_reconciler",
+    "//testing/gtest",
+  ]
+}

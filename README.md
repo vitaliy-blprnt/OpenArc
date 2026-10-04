@@ -11,8 +11,9 @@ browser platform rather than implementing a subset of extension APIs.
 The initial foundation includes a pinned Chromium/depot_tools checkout workflow,
 an isolated development launcher, an ordered patch series for OpenArc's macOS
 identity, native vertical-tab default, and built-in AI feature defaults, plus
-tooling tests. The Arc-style saved
-tab lifecycle and Spaces are not implemented yet. There is no qualified browser
+tooling tests. A native saved-tab association helper has standalone C++ tests;
+browser integration, the Arc-style saved-tab lifecycle, and Spaces are not
+implemented yet. There is no qualified browser
 release or download.
 
 See [current status and evidence](docs/STATUS.md) for build and validation results.
@@ -44,6 +45,7 @@ not an official signed release. Existing Chrome and Arc profiles are not used.
 - [Chromium foundations](docs/research/chromium-foundations.md): technical options, compatibility, and maintenance requirements.
 - [Chromium integration map](docs/CHROMIUM-INTEGRATION.md): source seams at the exact pinned revision.
 - [Saved-tab model](docs/SAVED-TAB-MODEL.md): proposed native interfaces, ownership, recovery, and the first sidebar slice.
+- [Native association helper](src/openarc/workspace/README.md): restore reconciliation code and standalone test recipe; browser integration pending.
 - [Extension compatibility gate](docs/EXTENSION-COMPATIBILITY.md): required platform and native-integration checks.
 - [Extension platform probe](docs/EXTENSION-PROBE.md): isolated MV3 API checks and a synthetic native-messaging host.
 - [Contributing](CONTRIBUTING.md), [security policy](SECURITY.md), and [release process](docs/RELEASING.md).
