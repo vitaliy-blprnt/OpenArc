@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {prefix, fixtureURL, exampleURL, ownsURL, ownsBookmark, bookmarkCleanupOrder, validateLedger, ProbeError, Blocked, diagnosticMessage, validNativeReply} from "./scope.mjs";
 import {checkNativeHost} from "./native.mjs";
 import {pinRoundTrip, groupRoundTrip, removeOwnedTab} from "./tab-structure.mjs";
+import {tabEventDelivery} from "./tab-events.mjs";
 
 const run = "c638f088-bfe0-4a18-a667-15b293258055";
 const other = "a638f088-bfe0-4a18-a667-15b293258055";
@@ -314,4 +315,233 @@ test("cleanup revalidates ownership after ungrouping before closing a tab", asyn
   await assert.rejects(removeOwnedTab(harness.tabs, 11, harness.readOwned), /Fixture changed/);
   assert.deepEqual(harness.mutations, [["ungroup", 11]]);
   assert.equal(harness.pages().length, 2);
+});
+
+function tabEventsHarness() {
+  const harness = structureHarness();
+  harness.pages().forEach((tab, index) => { tab.active = index === 0; });
+  const event = () => ({listeners: new Set(),
+    addListener(callback) { this.listeners.add(callback); },
+    removeListener(callback) { this.listeners.delete(callback); },
+    emit(...args) { for (const callback of [...this.listeners]) callback(...args); }});
+  harness.tabs.onMoved = event();
+  harness.tabs.onActivated = event();
+  harness.autoEvents = true;
+  const move = harness.tabs.move;
+  harness.tabs.move = async (id, options) => {
+    assert.equal(harness.tabs.onMoved.listeners.size, 1, "subscribe before the mutation");
+    assert.equal(harness.tabs.onActivated.listeners.size, 0);
+    const fromIndex = harness.pages().find((tab) => tab.id === id).index;
+    await move(id, options);
+    if (harness.autoEvents) harness.tabs.onMoved.emit(id,
+      {windowId: options.windowId, fromIndex, toIndex: options.index});
+  };
+  const update = harness.tabs.update;
+  harness.tabs.update = async (id, properties) => {
+    assert.equal(harness.tabs.onMoved.listeners.size, 0, "previous listener must detach");
+    assert.equal(harness.tabs.onActivated.listeners.size, 1);
+    assert.deepEqual(properties, {active: true});
+    harness.pages().forEach((tab) => { tab.active = tab.id === id; });
+    await update(id, properties);
+    if (harness.autoEvents) harness.tabs.onActivated.emit({tabId: id, windowId: 7});
+  };
+  harness.timers = {callback: null, cleared: false,
+    setTimeout(callback, ms) { assert.equal(ms, 10000); this.callback = callback; return 41; },
+    clearTimeout(id) { assert.equal(id, 41); this.cleared = true; }};
+  harness.closed = () => {
+    assert.equal(harness.tabs.onMoved.listeners.size, 0);
+    assert.equal(harness.tabs.onActivated.listeners.size, 0);
+    assert.equal(harness.timers.cleared, true);
+  };
+  harness.run = () => tabEventDelivery(harness.tabs, harness.context, harness.timers);
+  return harness;
+}
+
+const turn = () => new Promise((resolve) => setImmediate(resolve));
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return {promise, resolve};
+}
+
+test("tab events await both delivery and API completion when events arrive first", async () => {
+  const harness = tabEventsHarness();
+  const move = harness.tabs.move;
+  const moveCompletion = deferred();
+  harness.tabs.move = async (...args) => { await move(...args); await moveCompletion.promise; };
+  const update = harness.tabs.update;
+  const updateCompletion = deferred();
+  harness.tabs.update = async (...args) => { await update(...args); await updateCompletion.promise; };
+  let finished = false;
+  const result = harness.run().then(() => { finished = true; });
+  await turn();
+  assert.deepEqual(harness.mutations, [["move", 12]]);
+  assert.equal(harness.tabs.onMoved.listeners.size, 1);
+  moveCompletion.resolve();
+  await turn();
+  assert.deepEqual(harness.mutations, [["move", 12], ["update", 12]]);
+  assert.equal(finished, false);
+  updateCompletion.resolve();
+  await result;
+  harness.closed();
+  assert.deepEqual(harness.context.recordedIds, [11, 12], "the original journal remains sufficient");
+});
+
+test("tab events wait for delayed delivery after APIs resolve and ignore unrelated IDs/windows", async () => {
+  const harness = tabEventsHarness();
+  harness.autoEvents = false;
+  let finished = false;
+  const result = harness.run().then(() => { finished = true; });
+  await turn();
+  const privateInfo = {windowId: 7, get fromIndex() { throw new Error("unrelated detail read"); }};
+  harness.tabs.onMoved.emit(99, privateInfo);
+  harness.tabs.onMoved.emit(12, {windowId: 9,
+    get fromIndex() { throw new Error("unrelated detail read"); }});
+  await turn();
+  assert.deepEqual(harness.mutations, [["move", 12]]);
+  harness.tabs.onMoved.emit(12, {windowId: 7, fromIndex: 1, toIndex: 0});
+  await turn();
+  harness.tabs.onActivated.emit({tabId: 99, windowId: 7});
+  harness.tabs.onActivated.emit({tabId: 12, windowId: 9});
+  await turn();
+  assert.equal(finished, false);
+  harness.tabs.onActivated.emit({tabId: 12, windowId: 7});
+  await result;
+  harness.closed();
+});
+
+test("matching events before mutation dispatch cannot satisfy the check", async () => {
+  const harness = tabEventsHarness();
+  harness.autoEvents = false;
+  const query = harness.tabs.query;
+  harness.tabs.query = async (options) => {
+    harness.tabs.onMoved.emit(12, {windowId: 7, fromIndex: 1, toIndex: 0});
+    return query(options);
+  };
+  const result = harness.run();
+  const rejected = assert.rejects(result, /within 10 seconds/);
+  await turn();
+  assert.deepEqual(harness.mutations, [["move", 12]]);
+  harness.timers.callback();
+  await rejected;
+  harness.closed();
+});
+
+test("a malformed event for the exact moved tab fails without activation", async () => {
+  const harness = tabEventsHarness();
+  harness.autoEvents = false;
+  const result = harness.run();
+  const rejected = assert.rejects(result, /unexpected indices/);
+  await turn();
+  harness.tabs.onMoved.emit(12, {windowId: 7, fromIndex: 0, toIndex: 0});
+  await rejected;
+  harness.closed();
+  assert.deepEqual(harness.mutations, [["move", 12]]);
+});
+
+test("thrown move and activation mutations detach listeners and withhold private API errors", async () => {
+  for (const method of ["move", "update"]) {
+    const harness = tabEventsHarness();
+    harness.tabs[method] = () => { throw new Error("API failed for https://private.example/secret"); };
+    await assert.rejects(harness.run(), (error) => {
+      assert.equal(diagnosticMessage(error).includes("private.example"), false);
+      return true;
+    });
+    harness.closed();
+    assert.deepEqual(harness.mutations, method === "move" ? [] : [["move", 12]]);
+  }
+});
+
+test("timeouts at either event phase detach listeners and late events cannot advance", async () => {
+  for (const phase of ["move", "activate"]) {
+    const harness = tabEventsHarness();
+    harness.autoEvents = false;
+    const result = harness.run();
+    const rejected = assert.rejects(result, /within 10 seconds/);
+    await turn();
+    if (phase === "activate") {
+      harness.tabs.onMoved.emit(12, {windowId: 7, fromIndex: 1, toIndex: 0});
+      await turn();
+    }
+    const event = phase === "move" ? harness.tabs.onMoved : harness.tabs.onActivated;
+    const late = [...event.listeners][0];
+    harness.timers.callback();
+    await rejected;
+    harness.closed();
+    if (phase === "move") late(12, {windowId: 7, fromIndex: 1, toIndex: 0});
+    else late({tabId: 12, windowId: 7});
+    await turn();
+    assert.deepEqual(harness.mutations, phase === "move" ? [["move", 12]] : [["move", 12], ["update", 12]]);
+  }
+});
+
+test("a timed-out ownership read or API call cannot dispatch a subsequent mutation", async () => {
+  for (const pending of ["query", "move"]) {
+    const harness = tabEventsHarness();
+    const completion = deferred();
+    const original = harness.tabs[pending];
+    harness.tabs[pending] = async (...args) => {
+      const value = await original(...args);
+      await completion.promise;
+      return value;
+    };
+    const result = harness.run();
+    const rejected = assert.rejects(result, /within 10 seconds/);
+    await turn();
+    harness.timers.callback();
+    await rejected;
+    harness.closed();
+    completion.resolve();
+    await turn();
+    assert.deepEqual(harness.mutations, pending === "query" ? [] : [["move", 12]]);
+  }
+});
+
+test("ownership changes immediately before either mutation preserve changed resources", async () => {
+  for (const phase of ["move", "activate"]) {
+    for (const change of [
+      (h) => { h.pages()[0].pendingUrl = "https://private.example/secret"; },
+      (h) => { h.pages()[0].windowId = 9; },
+      (h) => { h.context.recordedIds = [11]; },
+      (h) => h.pages().push({id: 99, windowId: 7, index: 2, url: "https://private.example/secret"}),
+    ]) {
+      const harness = tabEventsHarness();
+      const event = phase === "move" ? harness.tabs.onMoved : harness.tabs.onActivated;
+      const add = event.addListener;
+      event.addListener = (listener) => { add.call(event, listener); change(harness); };
+      await assert.rejects(harness.run(), (error) => {
+        assert.equal(diagnosticMessage(error).includes("private.example"), false);
+        return error instanceof ProbeError;
+      });
+      harness.closed();
+      assert.deepEqual(harness.mutations, phase === "move" ? [] : [["move", 12]]);
+    }
+  }
+});
+
+test("event delivery alone cannot pass when the owned API state did not change", async () => {
+  for (const phase of ["move", "activate"]) {
+    const harness = tabEventsHarness();
+    if (phase === "move") {
+      harness.tabs.move = async () => harness.tabs.onMoved.emit(12, {windowId: 7, fromIndex: 1, toIndex: 0});
+    } else {
+      harness.tabs.update = async () => harness.tabs.onActivated.emit({tabId: 12, windowId: 7});
+    }
+    await assert.rejects(harness.run(), /did not match its delivered event/);
+    harness.closed();
+  }
+});
+
+test("tab-event default timers preserve the browser global receiver", async (context) => {
+  const harness = tabEventsHarness();
+  context.mock.method(globalThis, "setTimeout", function (callback, ms) {
+    assert.equal(this, globalThis);
+    return harness.timers.setTimeout(callback, ms);
+  });
+  context.mock.method(globalThis, "clearTimeout", function (id) {
+    assert.equal(this, globalThis);
+    return harness.timers.clearTimeout(id);
+  });
+  await tabEventDelivery(harness.tabs, harness.context);
+  harness.closed();
 });

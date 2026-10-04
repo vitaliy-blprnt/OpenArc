@@ -3,7 +3,7 @@ import {Blocked, ProbeError, ownsURL, prefix} from "./scope.mjs";
 
 function assert(condition, message) { if (!condition) throw new ProbeError(message); }
 
-async function fixturePair(tabs, context, query = {}) {
+export async function fixturePair(tabs, context, query = {}) {
   const {windowId, ids, recordedIds, base, runId} = context;
   if (!Number.isInteger(windowId) || ids.length !== 2 || ids.some((id) => !Number.isInteger(id))) {
     throw new Blocked("Two synthetic tabs in their original window are required.");

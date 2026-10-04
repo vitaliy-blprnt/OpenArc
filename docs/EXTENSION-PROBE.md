@@ -113,22 +113,37 @@ this synthetic exchange proves only that transport path in the tested build.
 | Tabs | Create a separate fixture window and nonce-labeled pages; query that label, move, navigate, mute, and remove recorded fixture IDs |
 | Pin/unpin | Pin the second real tab, read back pinned-first ordering and zero-based indices, unpin it, then restore the original synthetic order |
 | Tab groups | Group only the two recorded synthetic tabs; get/update/query group title and color; verify tab membership and indices; ungroup both and confirm the group disappears |
+| Tab events | Move and activate only the recorded synthetic pair; require matching `onMoved` indices and `onActivated` identity, API completion, and owned-state readback |
 | Bookmarks | Create a uniquely labeled tree; create/move a bookmark and folder, rename a folder, remove the bookmark and empty fixture folders |
 | Content injection | Inject a packaged function into only the nonce-bearing example.com tab, verify a temporary DOM marker, remove that marker |
 | Sessions | Close the fixture's example.com tab and restore only its verified session ID |
 | Cleanup | Remove recorded, unchanged fixture resources; preserve unexpected content |
 
-Fixture version **0.2.0** adds the pin/unpin and tab-group checks, bringing the
-default suite to 21 checks. These additions have scope/unit validation only;
-they have **not yet been run in a browser**. Earlier 0.1.0 reports do not cover
-them. Reload the unpacked extension, accept its added `tabGroups` permission,
-and run the complete suite to produce new browser evidence.
+Fixture version **0.3.0** adds one tab-event delivery check, bringing the default
+suite to 22 checks. The event check and the pin/unpin and tab-group checks added
+in 0.2.0 have source-test validation only; they have **not yet been run in a
+browser**. Earlier 0.1.0 reports do not cover them. Reload the unpacked extension,
+accept its added `tabGroups` permission if upgrading from 0.1.0, and run the
+complete suite to produce new browser evidence. Source tests and reference-browser
+runs do not qualify OpenArc compatibility.
 
 Structure checks query only the synthetic window and stop if it contains more
 than the expected two recorded, nonce-owned tabs. They do not record unexpected
 tabs, group titles, or URLs. Group queries use that window and this run's unique
-title. No broad tab/group event listeners are installed; event delivery itself
-is not covered by these checks.
+title.
+
+The event check temporarily subscribes to `tabs.onMoved` and then
+`tabs.onActivated`, filtering immediately by the exact recorded tab ID and
+synthetic window ID. It keeps only the expected indices and completion facts;
+unrelated event contents are never logged, stored, or displayed. Each listener
+is installed before a fresh ownership check and its API mutation; events before
+that mutation do not count. The check requires event delivery and API completion
+in either order, then rechecks the owned window state. Both phases share one
+10-second deadline, and listeners and the timer detach on success, failure, or
+timeout. Chrome cannot cancel an already dispatched API request, but no later
+event-check mutation is dispatched after timeout. The changed order and active
+tab belong only to the existing synthetic pair; their recorded IDs continue
+through the normal cleanup journal. No persistent tab-event listener is added.
 
 The sessions API cannot filter recently closed entries by extension ownership.
 The probe asks for only the newest entry, compares its tab URL to this run's exact
@@ -183,9 +198,12 @@ node --test tests/extensions/platform-probe/scope.test.mjs
 ```
 
 They verify rejection of foreign/changed resources, pinned-order assertions,
-group-operation boundaries, interrupted-group cleanup, and cleanup ordering. They
-do not execute Chrome APIs. JavaScript parsing and manifest validation are also
-static checks; only an actual dashboard run supplies browser API evidence.
+group-operation boundaries, interrupted-group cleanup, and cleanup ordering.
+Event tests cover both event/API completion orders, unrelated and pre-mutation
+events, malformed delivery, thrown mutations, timeouts, listener cleanup, and
+ownership changes before mutation. They do not execute Chrome APIs. JavaScript
+parsing and manifest validation are also static checks; only an actual dashboard
+run supplies browser API evidence.
 
 ## Official API references
 

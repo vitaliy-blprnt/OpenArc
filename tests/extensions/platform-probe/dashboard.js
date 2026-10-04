@@ -2,6 +2,7 @@
 import {LEDGER_KEY, REPORT_KEY, prefix, fixtureURL, exampleURL, ownsURL, ownsBookmark, bookmarkCleanupOrder, validateLedger, ProbeError, Blocked, diagnosticMessage} from "./scope.mjs";
 import {checkNativeHost} from "./native.mjs";
 import {pinRoundTrip, groupRoundTrip, removeOwnedTab} from "./tab-structure.mjs";
+import {tabEventDelivery} from "./tab-events.mjs";
 
 const base = chrome.runtime.getURL("/");
 const ui = Object.fromEntries(["run", "cleanup", "export", "isolated", "status", "results", "native", "native-status"].map((id) => [id, document.getElementById(id)]));
@@ -15,6 +16,7 @@ const CHECKS = [
   ["create", "tabs.create"], ["query", "tabs.query (fixture only)"],
   ["move", "tabs.move"], ["pin", "tabs.update pin/unpin and real ordering"],
   ["groups", "Tab-group metadata and membership round trip"],
+  ["events", "Real tab move and activation event delivery"],
   ["update", "tabs.update"], ["remove", "tabs.remove"],
   ["bookmarks-create", "bookmarks.create"], ["bookmarks-move", "bookmarks.move"],
   ["bookmarks-update", "bookmarks.update"], ["bookmarks-remove", "bookmarks.remove"],
@@ -268,6 +270,7 @@ async function runWithLock() {
     const structureContext = () => ({base, runId, windowId, ids: [first, second], recordedIds: ledger.tabs});
     await step("pin", () => pinRoundTrip(chrome.tabs, structureContext()));
     await step("groups", () => groupRoundTrip(chrome.tabs, chrome.tabGroups, structureContext()));
+    await step("events", () => tabEventDelivery(chrome.tabs, structureContext()));
     await step("update", async () => {
       await fixtureTab(second);
       const updated = await chrome.tabs.update(second, {url: fixtureURL(base, runId, "updated"), muted: true});
